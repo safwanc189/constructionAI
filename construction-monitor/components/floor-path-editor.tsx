@@ -9,6 +9,7 @@ type Point = { x: number; y: number } // normalized [0..1]
 export function FloorPathEditor({
   floorPlanImageUrl,
   onComplete,
+
   onCancel,
   initialPath,
 }: {
@@ -28,20 +29,27 @@ export function FloorPathEditor({
   }, [points])
 
   const clickToPoint = (e: React.MouseEvent) => {
+    console.log("🖱️ Click detected on floor plan")
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
     const p: Point = { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) }
+    console.log("📍 Click position (normalized):", p)
     if (mode === "start") {
+      console.log("🚩 Setting start point:", p)
       setStart(p)
       setMode("path")
     } else {
+      console.log("➕ Adding path point:", p)
       setPoints((prev) => [...prev, p])
     }
   }
 
-  const undo = () => setPoints((p) => p.slice(0, -1))
+  const undo = () => {
+    console.log("↩️ Undo last point")
+    setPoints((p) => p.slice(0, -1))
+  }
   const reset = () => {
     setStart(null)
     setPoints([])
@@ -52,6 +60,7 @@ export function FloorPathEditor({
     if (!start || points.length < 2) return
     onComplete({ start, polyline: points })
   }
+  console.log("✅ Saving path:", { start, points })
 
   return (
     <div className="space-y-3">

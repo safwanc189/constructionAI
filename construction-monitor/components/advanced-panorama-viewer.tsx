@@ -30,6 +30,7 @@ export function AdvancedPanoramaViewer({ tour }: { tour: VirtualTour }) {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isStaticView, setIsStaticView] = useState(false) // 👈 only toggle this
 
+  //Backend and panorama urls
   const backendUrl = "http://localhost:8000"
   const stitchedUrl = `${backendUrl}/panoramas/${tour.id}_panorama.jpg`
 
@@ -54,7 +55,7 @@ export function AdvancedPanoramaViewer({ tour }: { tour: VirtualTour }) {
         }
       }
 
-      // Load pannellum if not already
+      // 📦 Dynamically load Pannellum script and stylesheet (only once)
       if (!window.pannellum) {
         await new Promise<void>((resolve) => {
           const script = document.createElement("script")
@@ -129,8 +130,12 @@ export function AdvancedPanoramaViewer({ tour }: { tour: VirtualTour }) {
   // 🌐 Toggle between 360° and Flat
   const toggleViewMode = () => setIsStaticView((prev) => !prev)
 
+  // 🗺️ Load floor plan + path data from IndexedDB (no backend)
+
+
   return (
     <div ref={containerRef} className="relative h-screen w-full bg-black overflow-hidden">
+
       {/* 🖼️ Viewer */}
       {!isStaticView ? (
         <div ref={viewerRef} className="absolute inset-0 cursor-grab" />

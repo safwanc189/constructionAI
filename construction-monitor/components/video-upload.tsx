@@ -17,6 +17,7 @@ import { VideoIcon, ImageIcon, Save, Film } from "lucide-react"
 //NEW IMPORTS for upload images and trigger stichting
 import { uploadImageFile, triggerStitchPanorama } from "@/lib/api"
 
+
 interface VideoUploadProps {
   floorPlan: FloorPlan
 }

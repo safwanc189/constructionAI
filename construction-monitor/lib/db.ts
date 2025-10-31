@@ -1,12 +1,17 @@
 // IndexedDB wrapper for local storage of tours and captures
 
 const DB_NAME = "construction-monitor-db"
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 export class TourDatabase {
   private db: IDBDatabase | null = null
 
   async init(): Promise<void> {
+    if (typeof window === "undefined" || !("indexedDB" in window)) {
+      console.warn("⚠️ IndexedDB not available in this environment (probably SSR).")
+      return
+    }
+
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION)
 
@@ -173,3 +178,17 @@ export class TourDatabase {
 }
 
 export const tourDB = new TourDatabase()
+
+// Automatically initialize IndexedDB on module load
+if (typeof window !== "undefined") {
+  (async () => {
+    try {
+      await tourDB.init()
+      console.log("✅ IndexedDB initialized successfully (client-side)")
+    } catch (err) {
+      console.error("❌ Failed to initialize IndexedDB:", err)
+    }
+  })()
+} else {
+  console.log("ℹ️ Skipping IndexedDB init during SSR.")
+}

@@ -46,6 +46,7 @@
     "date-fns": "4.1.0",
     "embla-carousel-react": "latest",
     "geist": "latest",
+    "idb": "^8.0.3",
     "input-otp": "latest",
     "lucide-react": "^0.454.0",
     "next": "15.2.4",
