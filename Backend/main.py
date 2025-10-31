@@ -121,13 +121,24 @@ async def upload_image_file(tour_id: str, file: UploadFile = File(...)):
 async def stitch_panorama(tour_id: str):
     """
     Stitches all uploaded frames into one panorama using OpenCV.
-    The result is saved as:
-        stitched_panoramas/<tour_id>_panorama.jpg
+    Skips stitching if the panorama already exists.
     """
-
     logging.info(f"🧵 Stitching requested for tour: {tour_id}")
 
-    # 1️⃣ Load uploaded images
+    # 🔹 1️⃣ Check if panorama already exists
+    output_filename = f"{tour_id}_panorama.jpg"
+    output_path = os.path.join(STITCHED_DIR, output_filename)
+    if os.path.exists(output_path):
+        logging.info(f"🖼️ Panorama already exists for {tour_id}, skipping stitching.")
+        return {
+            "message": "✅ Panorama already exists, skipping stitching.",
+            "tour_id": tour_id,
+            "status": "exists",
+            "saved_as": output_filename,
+            "finalPanoramaUrl": f"/panoramas/{output_filename}",
+        }
+
+    # 🔹 2️⃣ Load uploaded images
     image_files = get_tour_files(tour_id)
     if len(image_files) < 2:
         logging.error(f"⚠️ Not enough frames to stitch ({len(image_files)} found)")
@@ -142,7 +153,7 @@ async def stitch_panorama(tour_id: str):
         logging.error(f"❌ Error reading images: {e}")
         raise HTTPException(status_code=500, detail=f"Error loading images: {e}")
 
-    # 2️⃣ Stitch with OpenCV
+    # 🔹 3️⃣ Stitch with OpenCV
     stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
     start_time = time.time()
     status, stitched_image = stitcher.stitch(images)
@@ -153,10 +164,7 @@ async def stitch_panorama(tour_id: str):
         logging.warning(f"⚠️ Stitching failed (Status: {status}). Using first frame as fallback.")
         stitched_image = images[0]
 
-    # 3️⃣ Save the panorama
-    output_filename = f"{tour_id}_panorama.jpg"
-    output_path = os.path.join(STITCHED_DIR, output_filename)
-
+    # 🔹 4️⃣ Save the panorama
     try:
         cv2.imwrite(output_path, stitched_image)
         logging.info(f"💾 Panorama successfully saved to: {output_path}")
@@ -164,15 +172,14 @@ async def stitch_panorama(tour_id: str):
         logging.error(f"❌ Error saving stitched panorama: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save panorama: {e}")
 
-    final_url = f"/panoramas/{output_filename}"
+    # 🔹 5️⃣ Return result
     return {
         "message": f"✅ Stitching completed in {duration:.2f}s",
         "tour_id": tour_id,
         "status": int(status),
         "saved_as": output_filename,
-        "finalPanoramaUrl": final_url
+        "finalPanoramaUrl": f"/panoramas/{output_filename}",
     }
-
 
 # =========================================================
 # 5️⃣ RUN SERVER
