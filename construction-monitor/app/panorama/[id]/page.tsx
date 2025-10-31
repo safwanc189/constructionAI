@@ -115,7 +115,7 @@ export default function PanoramaPage({ params }: { params: Promise<{ id: string 
   }
 
   /**
-   * 🚫 Case 2: If error or no tour data found, show fallback
+   * 🚫 Case 2: If error or no tour data found, show fallback........
    */
 
   if (error || !tour) {
