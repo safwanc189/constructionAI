@@ -2,11 +2,14 @@ import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse 
 import os
 import shutil
 import cv2
 import logging
 import time
+from pydantic import BaseModel
+import numpy as np
 
 
 # 1️⃣ APP SETUP
@@ -48,6 +51,12 @@ app.mount(
     "/panoramas",
     StaticFiles(directory=r"D:\Cosysta\Construction\Working on\Backend\stitched_panoramas"),
     name="panoramas",
+)
+
+app.mount(
+    "/compare_results",
+    StaticFiles(directory="compare_results"),
+    name="compare_results"
 )
 
 
@@ -181,6 +190,63 @@ async def stitch_panorama(tour_id: str):
         "finalPanoramaUrl": f"/panoramas/{output_filename}",
     }
 
+
+# ---------------------------------------------------------
+# Compare Tours Endpoint
+# ---------------------------------------------------------
+class CompareRequest(BaseModel):
+    tourA: str
+    tourB: str
+
+COMPARE_DIR = "compare_results"
+os.makedirs(COMPARE_DIR, exist_ok=True)
+
+@app.post("/compare-tours")
+async def compare_tours(data: CompareRequest):
+
+    logging.info("\n📌 Comparison Request Received")
+    logging.info(f"Tour A: {data.tourA}")
+    logging.info(f"Tour B: {data.tourB}")
+
+    pathA = os.path.join(STITCHED_DIR, f"{data.tourA}_panorama.jpg")
+    pathB = os.path.join(STITCHED_DIR, f"{data.tourB}_panorama.jpg")
+
+    if not os.path.exists(pathA) or not os.path.exists(pathB):
+        raise HTTPException(status_code=400, detail="One or both panoramas not found")
+
+    imgA = cv2.imread(pathA)
+    imgB = cv2.imread(pathB)
+
+    if imgA.shape != imgB.shape:
+        imgB = cv2.resize(imgB, (imgA.shape[1], imgA.shape[0]))
+
+    diff = cv2.absdiff(imgA, imgB)
+    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+
+    diff_heatmap = cv2.applyColorMap(thresh, cv2.COLORMAP_JET)
+    blended = cv2.addWeighted(imgA, 0.6, diff_heatmap, 0.6, 0)
+
+    compare_filename = f"{data.tourA}_{data.tourB}_diff.jpg"
+    compare_path = os.path.join("compare_results", compare_filename)
+
+    os.makedirs("compare_results", exist_ok=True)
+    cv2.imwrite(compare_path, blended)
+
+    logging.info(f"✅ Diff saved: {compare_path}")
+
+    return {
+        "message": "✅ Comparison complete",
+        "resultImageUrl": f"/compare_results/{compare_filename}"
+    }
+
+
+@app.get("/compare_results/{filename}")
+async def get_compare_result(filename: str):
+    file_path = os.path.join(COMPARE_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Diff image not found")
+    return FileResponse(file_path)
 # =========================================================
 # 5️⃣ RUN SERVER
 # =========================================================
