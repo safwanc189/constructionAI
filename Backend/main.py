@@ -114,6 +114,8 @@ def get_tour_files(tour_id: str):
 # 🔹 semantic segmentation & saves a colored overlay result
 # =========================================================
 
+
+
 def run_segmentation(input_path, output_path):
     """Runs semantic segmentation & saves a colored overlay result."""
     image = cv2.imread(input_path)
@@ -141,12 +143,62 @@ def run_segmentation(input_path, output_path):
     seg_map_resized = cv2.resize(seg_map.astype(np.uint8), (rgb_image.shape[1], rgb_image.shape[0]),
                              interpolation=cv2.INTER_NEAREST)
 
-    # Apply colors
-    colors = np.random.randint(0, 255, size=(150, 3), dtype=np.uint8)
-    color_mask = colors[seg_map_resized]
+    # ✅ ADE20K construction class mappings
 
-    # Blend overlay
-    final = cv2.addWeighted(rgb_image, 0.7, color_mask, 0.6, 0)
+    CLASS_MAP = {
+    # ─────────────────────────
+    # 🏗️ Structural Elements
+    # ─────────────────────────
+    1:  (0, 120, 255),   # wall - blue
+    2:  (200, 0, 200),   # ceiling - purple
+    3:  (255, 0, 0),     # floor - red
+    21: (0, 255, 0),     # door - green
+    23: (255, 255, 0),   # window - yellow
+
+    # ─────────────────────────
+    # 🪑 Furniture
+    # ─────────────────────────
+    24: (255, 160, 60),  # cabinet - light orange
+    28: (255, 190, 90),  # sofa - soft orange
+    31: (255, 170, 70),  # bed - warm orange
+    33: (255, 200, 100), # table - creamy orange
+    34: (255, 150, 50),  # chair - deep orange
+    37: (255, 210, 120), # shelves - pastel orange
+    38: (255, 180, 100), # drawer - tan orange
+    57: (255, 128, 0),   # furniture (misc) - bright orange
+
+    # ─────────────────────────
+    # ⚙️ Appliances
+    # ─────────────────────────
+    47: (180, 255, 180), # refrigerator - mint green
+    48: (160, 255, 160), # television - pale green
+    49: (140, 255, 140), # computer - soft green
+
+    # ─────────────────────────
+    # 🚿 Plumbing / Utilities
+    # ─────────────────────────
+    46: (0, 200, 200),   # sink - aqua
+    59: (0, 220, 200),   # bathtub - teal aqua
+
+    # ─────────────────────────
+    # 💡 Lighting
+    # ─────────────────────────
+    36: (255, 255, 180), # lamp/light - warm white
+    }
+
+    
+    DEFAULT_COLOR = (0,0,0)  # Unknown areas
+
+    color_mask = np.zeros_like(image)
+
+    for class_id, color in CLASS_MAP.items():
+        color_mask[seg_map_resized == class_id] = color
+
+# Unknown classes kept dark gray
+    color_mask[(seg_map_resized >= 0) & (seg_map_resized <= 150)
+              & ~np.isin(seg_map_resized, list(CLASS_MAP.keys()))] = DEFAULT_COLOR
+
+    final = cv2.addWeighted(rgb_image, 0.6, color_mask, 0.6, 0)
     cv2.imwrite(output_path, cv2.cvtColor(final, cv2.COLOR_RGB2BGR))
 
 # =========================================================
