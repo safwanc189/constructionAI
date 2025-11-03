@@ -10,6 +10,9 @@ import logging
 import time
 from pydantic import BaseModel
 import numpy as np
+from ultralytics import YOLO
+
+model = YOLO("yolov8n.pt")
 
 
 # 1️⃣ APP SETUP
@@ -201,12 +204,8 @@ class CompareRequest(BaseModel):
 COMPARE_DIR = "compare_results"
 os.makedirs(COMPARE_DIR, exist_ok=True)
 
-@app.post("/compare-tours")
-async def compare_tours(data: CompareRequest):
-
-    logging.info("\n📌 Comparison Request Received")
-    logging.info(f"Tour A: {data.tourA}")
-    logging.info(f"Tour B: {data.tourB}")
+@app.post("/compare-tours-ai")
+async def compare_tours_ai(data: CompareRequest):
 
     pathA = os.path.join(STITCHED_DIR, f"{data.tourA}_panorama.jpg")
     pathB = os.path.join(STITCHED_DIR, f"{data.tourB}_panorama.jpg")
@@ -214,30 +213,21 @@ async def compare_tours(data: CompareRequest):
     if not os.path.exists(pathA) or not os.path.exists(pathB):
         raise HTTPException(status_code=400, detail="One or both panoramas not found")
 
-    imgA = cv2.imread(pathA)
-    imgB = cv2.imread(pathB)
+    # ✅ Run YOLO detection
+    resultsA = model(pathA)
+    resultsB = model(pathB)
 
-    if imgA.shape != imgB.shape:
-        imgB = cv2.resize(imgB, (imgA.shape[1], imgA.shape[0]))
+    # ✅ Save detection visualization
+    detectA_path = os.path.join(COMPARE_DIR, f"{data.tourA}_detected.jpg")
+    detectB_path = os.path.join(COMPARE_DIR, f"{data.tourB}_detected.jpg")
 
-    diff = cv2.absdiff(imgA, imgB)
-    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
-
-    diff_heatmap = cv2.applyColorMap(thresh, cv2.COLORMAP_JET)
-    blended = cv2.addWeighted(imgA, 0.6, diff_heatmap, 0.6, 0)
-
-    compare_filename = f"{data.tourA}_{data.tourB}_diff.jpg"
-    compare_path = os.path.join("compare_results", compare_filename)
-
-    os.makedirs("compare_results", exist_ok=True)
-    cv2.imwrite(compare_path, blended)
-
-    logging.info(f"✅ Diff saved: {compare_path}")
+    resultsA[0].save(filename=detectA_path)
+    resultsB[0].save(filename=detectB_path)
 
     return {
-        "message": "✅ Comparison complete",
-        "resultImageUrl": f"/compare_results/{compare_filename}"
+        "message": "✅ AI detection comparison complete",
+        "tourA_image": f"/compare_results/{data.tourA}_detected.jpg",
+        "tourB_image": f"/compare_results/{data.tourB}_detected.jpg"
     }
 
 

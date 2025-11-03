@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { VirtualTour } from "@/lib/types"
 import { tourDB } from "@/lib/db"
 import { AdvancedPanoramaViewer } from "@/components/advanced-panorama-viewer"
+import { useRouter } from "next/navigation";
 
 /**
  * TimelineComparison
@@ -39,6 +40,8 @@ export function TimelineComparison() {
 
   const [overlayOpacity, setOverlayOpacity] = useState(50)
   const [sliderPosition, setSliderPosition] = useState(50)
+
+  const router = useRouter();
 
   // Base backend URL used to construct panorama urls when the tour object doesn't include one.
   const FASTAPI_URL = "http://localhost:8000"
@@ -341,7 +344,7 @@ export function TimelineComparison() {
                   if (!selectedTourA || !selectedTourB) return;
 
                   try {
-                    const response = await fetch(`${FASTAPI_URL}/compare-tours`, {
+                    const response = await fetch(`${FASTAPI_URL}/compare-tours-ai`, {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -351,20 +354,20 @@ export function TimelineComparison() {
                     });
 
                     const result = await response.json();
-                    console.log("📌 Full backend response:", result);
-                    console.log("Compare result:", result);
+                    console.log("AI Compare Result:", result);
 
-                    if (result.resultImageUrl) {
-                      // ✅ redirect to new comparison view page
-                      const fileName = result.resultImageUrl.split("/").pop(); // extract filename only
+                    if (result.tourA_image && result.tourB_image) {
+                      const aFile = result.tourA_image.split("/").pop();
+                      const bFile = result.tourB_image.split("/").pop();
 
-                      window.location.href = `/panorama-comparison/${fileName}`;
+                      // ✅ Redirect to a comparison view page that shows 2 images
+                      router.push(`/panorama-comparison/${selectedTourA.id}_${selectedTourB.id}`);
                     } else {
-                      alert("⚠ No comparison image returned from backend.");
+                      alert("⚠ No AI detection images returned!");
                     }
                   } catch (err) {
                     console.error("Compare error:", err);
-                    alert("❌ Failed to send comparison request.");
+                    alert("❌ Failed to send AI comparison request.");
                   }
                 }}
               >
