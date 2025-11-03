@@ -356,14 +356,19 @@ export function TimelineComparison() {
                     const result = await response.json();
                     console.log("AI Compare Result:", result);
 
-                    if (result.tourA_image && result.tourB_image) {
-                      const aFile = result.tourA_image.split("/").pop();
-                      const bFile = result.tourB_image.split("/").pop();
+                    if (
+                      result.yolo?.tourA ||
+                      result.yolo?.tourB ||
+                      result.segmentation?.tourA ||
+                      result.segmentation?.tourB
+                    ) {
+                      console.log("✅ AI assets received:", result);
 
-                      // ✅ Redirect to a comparison view page that shows 2 images
-                      router.push(`/panorama-comparison/${selectedTourA.id}_${selectedTourB.id}`);
+                      router.push(
+                        `/panorama-comparison/${selectedTourA.id}_${selectedTourB.id}`
+                      );
                     } else {
-                      alert("⚠ No AI detection images returned!");
+                      alert("⚠ Backend returned no visualization assets!");
                     }
                   } catch (err) {
                     console.error("Compare error:", err);

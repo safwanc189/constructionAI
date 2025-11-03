@@ -11,9 +11,27 @@ import time
 from pydantic import BaseModel
 import numpy as np
 from ultralytics import YOLO
+from transformers import Mask2FormerImageProcessor, AutoModelForUniversalSegmentation
+import torch
 
-model = YOLO("yolov8n.pt")
+# Prevent CPU overload on Laptop
+torch.set_num_threads(2)
 
+# =========================================================
+# Load Models
+# =========================================================
+
+#Load yolov8n
+yolo_model = YOLO("yolov8n.pt")
+
+# ✅ Load Mask2Former model
+processor = Mask2FormerImageProcessor.from_pretrained("facebook/mask2former-swin-tiny-ade-semantic")
+seg_model = AutoModelForUniversalSegmentation.from_pretrained(
+    "facebook/mask2former-swin-tiny-ade-semantic"
+).eval()
+
+device = torch.device("cpu")
+seg_model.to(device)
 
 # 1️⃣ APP SETUP
 app = FastAPI(title="Construction Monitor Stitching Service", version="1.3")
@@ -56,15 +74,18 @@ app.mount(
     name="panoramas",
 )
 
+# ✅ Ensure correct static file serving for compare results
+COMPARE_DIR = os.path.join(os.getcwd(), "compare_results")
+
 app.mount(
     "/compare_results",
-    StaticFiles(directory="compare_results"),
+    StaticFiles(directory=COMPARE_DIR),
     name="compare_results"
 )
 
 
 # =========================================================
-# 🔹 HELPER: Get all uploaded image files for a tour
+# 🔹 Get all uploaded image files for a tour
 # =========================================================
 def get_tour_files(tour_id: str):
     """
@@ -88,6 +109,45 @@ def get_tour_files(tour_id: str):
         ])
     return files
 
+
+# =========================================================
+# 🔹 semantic segmentation & saves a colored overlay result
+# =========================================================
+
+def run_segmentation(input_path, output_path):
+    """Runs semantic segmentation & saves a colored overlay result."""
+    image = cv2.imread(input_path)
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    inputs = processor(images=image, return_tensors="pt")
+    outputs = seg_model(**inputs)
+
+    # Convert raw outputs to class mask
+    class_scores = outputs.class_queries_logits  # [1, num_queries, num_classes]
+    mask_logits = outputs.masks_queries_logits  # [1, num_queries, H/4, W/4]
+    
+    # Resize masks to original resolution
+    mask_logits = torch.nn.functional.interpolate(
+         mask_logits,
+         size=inputs["pixel_values"].shape[-2:],  # original H, W
+         mode="bilinear",
+         align_corners=False,
+    )
+    
+    mask_probs = mask_logits.softmax(dim=1)
+    seg_map = mask_probs.argmax(dim=1).squeeze().cpu().numpy()
+
+    # Resize segmentation to original image resolution ✅
+    seg_map_resized = cv2.resize(seg_map.astype(np.uint8), (rgb_image.shape[1], rgb_image.shape[0]),
+                             interpolation=cv2.INTER_NEAREST)
+
+    # Apply colors
+    colors = np.random.randint(0, 255, size=(150, 3), dtype=np.uint8)
+    color_mask = colors[seg_map_resized]
+
+    # Blend overlay
+    final = cv2.addWeighted(rgb_image, 0.7, color_mask, 0.6, 0)
+    cv2.imwrite(output_path, cv2.cvtColor(final, cv2.COLOR_RGB2BGR))
 
 # =========================================================
 # 4️⃣ API ROUTES
@@ -185,6 +245,7 @@ async def stitch_panorama(tour_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to save panorama: {e}")
 
     # 🔹 5️⃣ Return result
+
     return {
         "message": f"✅ Stitching completed in {duration:.2f}s",
         "tour_id": tour_id,
@@ -204,31 +265,62 @@ class CompareRequest(BaseModel):
 COMPARE_DIR = "compare_results"
 os.makedirs(COMPARE_DIR, exist_ok=True)
 
+YOLO_DIR = os.path.join(COMPARE_DIR, "yolo")
+SEGMENT_DIR = os.path.join(COMPARE_DIR, "segmentation")
+
+os.makedirs(YOLO_DIR, exist_ok=True)
+os.makedirs(SEGMENT_DIR, exist_ok=True)
+
 @app.post("/compare-tours-ai")
 async def compare_tours_ai(data: CompareRequest):
-
     pathA = os.path.join(STITCHED_DIR, f"{data.tourA}_panorama.jpg")
     pathB = os.path.join(STITCHED_DIR, f"{data.tourB}_panorama.jpg")
 
     if not os.path.exists(pathA) or not os.path.exists(pathB):
         raise HTTPException(status_code=400, detail="One or both panoramas not found")
 
-    # ✅ Run YOLO detection
-    resultsA = model(pathA)
-    resultsB = model(pathB)
+    # ✅ YOLO Detection
+    yolo_A_path = os.path.join(YOLO_DIR, f"{data.tourA}_detected.jpg")
+    yolo_B_path = os.path.join(YOLO_DIR, f"{data.tourB}_detected.jpg")
 
-    # ✅ Save detection visualization
-    detectA_path = os.path.join(COMPARE_DIR, f"{data.tourA}_detected.jpg")
-    detectB_path = os.path.join(COMPARE_DIR, f"{data.tourB}_detected.jpg")
+    results_A = yolo_model(pathA)
+    results_A[0].save(yolo_A_path)
 
-    resultsA[0].save(filename=detectA_path)
-    resultsB[0].save(filename=detectB_path)
+    results_B = yolo_model(pathB)
+    results_B[0].save(yolo_B_path)
+    
 
+    # ✅ Segmentation Output Save Paths
+    seg_A_path = os.path.join(SEGMENT_DIR, f"{data.tourA}_segmented.jpg")
+    seg_B_path = os.path.join(SEGMENT_DIR, f"{data.tourB}_segmented.jpg")
+
+    # ✅ Mask2Former segmentation
+    run_segmentation(pathA, seg_A_path)
+    run_segmentation(pathB, seg_B_path)
+
+    print("Returning:", {
+        "yolo": {
+            "tourA": f"/compare_results/yolo/{data.tourA}_detected.jpg",
+            "tourB": f"/compare_results/yolo/{data.tourB}_detected.jpg"
+        },
+        "segmentation": {
+            "tourA": f"/compare_results/segmentation/{data.tourA}_segmented.jpg",
+            "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg"
+        }
+    })
+    
     return {
-        "message": "✅ AI detection comparison complete",
-        "tourA_image": f"/compare_results/{data.tourA}_detected.jpg",
-        "tourB_image": f"/compare_results/{data.tourB}_detected.jpg"
+        "message": "✅ Compare complete with YOLO + Segmentation",
+        "yolo": {
+            "tourA": f"/compare_results/yolo/{data.tourA}_detected.jpg",
+            "tourB": f"/compare_results/yolo/{data.tourB}_detected.jpg"
+        },
+        "segmentation": {
+            "tourA": f"/compare_results/segmentation/{data.tourA}_segmented.jpg",
+            "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg"
+        }
     }
+
 
 
 @app.get("/compare_results/{filename}")

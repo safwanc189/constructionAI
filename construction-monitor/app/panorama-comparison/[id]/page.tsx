@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 
-// ✅ Base URL for FastAPI Backend
 const FASTAPI_URL = "http://localhost:8000";
 
 export default function PanoramaComparisonPage({
@@ -11,32 +10,32 @@ export default function PanoramaComparisonPage({
 }: {
   params: { id: string };
 }) {
-  // ✅ Next.js 15 Migration fix → params is a Promise
   const [id, setId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"yolo" | "segmentation">("yolo");
+
+  const [yoloA, setYoloA] = useState<string | null>(null);
+  const [yoloB, setYoloB] = useState<string | null>(null);
+  const [segA, setSegA] = useState<string | null>(null);
+  const [segB, setSegB] = useState<string | null>(null);
+
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function unwrapParams() {
-      const resolved = await params; // Await the Promise
-      setId(resolved.id); // Store ID value
+      const resolved = await params;
+      setId(resolved.id);
     }
     unwrapParams();
   }, [params]);
 
-  // ✅ Store API result image URLs
-  const [imgA, setImgA] = useState<string | null>(null);
-  const [imgB, setImgB] = useState<string | null>(null);
-
-  // ✅ Loading status
-  const [loading, setLoading] = useState(true);
-
   useEffect(() => {
-    if (!id) return; // Wait until ID is fully resolved
+    if (!id) return;
 
-    // ID format: "tourA_tourB"
     const [tourA, tourB] = id.split("_");
-    console.log("🔍 Fetching AI comparison result →", tourA, tourB);
+    console.log("🔍 Fetching comparison results", tourA, tourB);
 
-    // ✅ API call → detect objects using YOLO in backend
+    setLoading(true);
+
     fetch(`${FASTAPI_URL}/compare-tours-ai`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -44,11 +43,14 @@ export default function PanoramaComparisonPage({
     })
       .then((res) => res.json())
       .then((data) => {
-        console.log("✅ AI Compare Response:", data);
+        console.log("✅ API Response:", data);
 
-        // ✅ Construct proper URL for backend static file
-        setImgA(`${FASTAPI_URL}${data.tourA_image}`);
-        setImgB(`${FASTAPI_URL}${data.tourB_image}`);
+        setYoloA(`${FASTAPI_URL}${data.yolo.tourA}`);
+        setYoloB(`${FASTAPI_URL}${data.yolo.tourB}`);
+
+        setSegA(`${FASTAPI_URL}${data.segmentation.tourA}`);
+        setSegB(`${FASTAPI_URL}${data.segmentation.tourB}`);
+
         setLoading(false);
       })
       .catch((err) => {
@@ -57,7 +59,6 @@ export default function PanoramaComparisonPage({
       });
   }, [id]);
 
-  // ✅ Loading UI
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-black">
@@ -66,43 +67,65 @@ export default function PanoramaComparisonPage({
     );
   }
 
-  // ✅ Final UI
+  const beforeImg = viewMode === "yolo" ? yoloA : segA;
+  const afterImg = viewMode === "yolo" ? yoloB : segB;
+
   return (
     <div className="w-full min-h-screen bg-black flex flex-col items-center p-4">
       <h1 className="text-white text-2xl font-semibold mb-3">
-        🤖 AI Object Detection Comparison
+        🏗️ Panorama Comparison
       </h1>
 
-      <p className="text-gray-300 text-sm mb-6">
-        Visualizing detected objects between two construction tours
-      </p>
+      {/* ✅ Toggle Buttons */}
+      <div className="flex gap-4 mb-6">
+        <button
+          onClick={() => setViewMode("yolo")}
+          className={`px-4 py-2 rounded-md font-semibold text-sm ${
+            viewMode === "yolo"
+              ? "bg-blue-500 text-white"
+              : "bg-gray-800 text-gray-300"
+          }`}
+        >
+          YOLO Detection
+        </button>
 
-      {/* ✅ Display detected panoramas */}
+        <button
+          onClick={() => setViewMode("segmentation")}
+          className={`px-4 py-2 rounded-md font-semibold text-sm ${
+            viewMode === "segmentation"
+              ? "bg-green-500 text-white"
+              : "bg-gray-800 text-gray-300"
+          }`}
+        >
+          Segmentation
+        </button>
+      </div>
+
+      {/* ✅ Show selected AI result */}
       <div className="flex flex-wrap gap-6 justify-center">
-        {imgA && (
+        {beforeImg && (
           <div className="flex flex-col items-center">
             <p className="text-white font-medium mb-2">Before</p>
             <img
-              src={imgA}
-              alt="Tour A Detection"
+              src={beforeImg}
+              alt="Tour A View"
               className="max-w-[45vw] max-h-[70vh] object-contain rounded-md shadow-md"
             />
           </div>
         )}
 
-        {imgB && (
+        {afterImg && (
           <div className="flex flex-col items-center">
             <p className="text-white font-medium mb-2">After</p>
             <img
-              src={imgB}
-              alt="Tour B Detection"
+              src={afterImg}
+              alt="Tour B View"
               className="max-w-[45vw] max-h-[70vh] object-contain rounded-md shadow-md"
             />
           </div>
         )}
       </div>
 
-      {/* ✅ Visual reference */}
       <p className="text-gray-500 text-xs mt-4">Compare ID: {id}</p>
     </div>
   );
