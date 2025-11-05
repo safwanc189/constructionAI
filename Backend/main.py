@@ -11,8 +11,10 @@ import time
 from pydantic import BaseModel
 import numpy as np
 from ultralytics import YOLO
-from transformers import Mask2FormerImageProcessor, AutoModelForUniversalSegmentation
+from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
+from PIL import Image
 import torch
+import random
 
 # Prevent CPU overload on Laptop
 torch.set_num_threads(2)
@@ -24,11 +26,13 @@ torch.set_num_threads(2)
 #Load yolov8n
 yolo_model = YOLO("yolov8n.pt")
 
-# ✅ Load Mask2Former model
-processor = Mask2FormerImageProcessor.from_pretrained("facebook/mask2former-swin-tiny-ade-semantic")
-seg_model = AutoModelForUniversalSegmentation.from_pretrained(
-    "facebook/mask2former-swin-tiny-ade-semantic"
-).eval()
+
+# ✅ Load SegFormer ADE20K model (lightweight and CPU-friendly)
+print("⏳ Loading SegFormer ADE20K model...")
+SEG_MODEL_ID = "nvidia/segformer-b2-finetuned-ade-512-512"
+processor = AutoImageProcessor.from_pretrained(SEG_MODEL_ID)
+seg_model = SegformerForSemanticSegmentation.from_pretrained(SEG_MODEL_ID).eval()
+print("✅ SegFormer model loaded successfully.")
 
 device = torch.device("cpu")
 seg_model.to(device)
@@ -61,27 +65,23 @@ app.add_middleware(
 # =========================================================
 # 3️⃣ FILE STORAGE SETUP
 # =========================================================
-UPLOAD_DIR = "temp_uploads"
-STITCHED_DIR = "stitched_panoramas"
+# 🧭 Auto-detect base project directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# 🗂 Define folders dynamically
+UPLOAD_DIR = os.path.join(BASE_DIR, "temp_uploads")
+STITCHED_DIR = os.path.join(BASE_DIR, "stitched_panoramas")
+COMPARE_DIR = os.path.join(BASE_DIR, "compare_results")
+
+# ✅ Ensure all directories exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STITCHED_DIR, exist_ok=True)
+os.makedirs(COMPARE_DIR, exist_ok=True)
 
+# 📁 Mount static directories for frontend access
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-app.mount(
-    "/panoramas",
-    StaticFiles(directory=r"D:\Cosysta\Construction\Working on\Backend\stitched_panoramas"),
-    name="panoramas",
-)
-
-# ✅ Ensure correct static file serving for compare results
-COMPARE_DIR = os.path.join(os.getcwd(), "compare_results")
-
-app.mount(
-    "/compare_results",
-    StaticFiles(directory=COMPARE_DIR),
-    name="compare_results"
-)
+app.mount("/panoramas", StaticFiles(directory=STITCHED_DIR), name="panoramas")
+app.mount("/compare_results", StaticFiles(directory=COMPARE_DIR), name="compare_results")
 
 
 # =========================================================
@@ -114,90 +114,82 @@ def get_tour_files(tour_id: str):
 # 🔹 semantic segmentation & saves a colored overlay result
 # =========================================================
 
-
-
 def run_segmentation(input_path, output_path):
-    """Runs semantic segmentation & saves a colored overlay result."""
+    """Runs semantic segmentation & saves a colored overlay result (SegFormer version)."""
     image = cv2.imread(input_path)
     rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    inputs = processor(images=image, return_tensors="pt")
-    outputs = seg_model(**inputs)
+    # ✅ Convert to PIL for SegFormer processor
+    pil_image = Image.fromarray(rgb_image)
 
-    # Convert raw outputs to class mask
-    class_scores = outputs.class_queries_logits  # [1, num_queries, num_classes]
-    mask_logits = outputs.masks_queries_logits  # [1, num_queries, H/4, W/4]
-    
-    # Resize masks to original resolution
-    mask_logits = torch.nn.functional.interpolate(
-         mask_logits,
-         size=inputs["pixel_values"].shape[-2:],  # original H, W
-         mode="bilinear",
-         align_corners=False,
+    # Run through SegFormer
+    inputs = processor(images=pil_image, return_tensors="pt")
+    with torch.no_grad():
+        outputs = seg_model(**inputs)
+
+    # Resize logits to original resolution
+    logits = torch.nn.functional.interpolate(
+        outputs.logits,
+        size=pil_image.size[::-1],
+        mode="bilinear",
+        align_corners=False,
     )
-    
-    mask_probs = mask_logits.softmax(dim=1)
-    seg_map = mask_probs.argmax(dim=1).squeeze().cpu().numpy()
 
-    # Resize segmentation to original image resolution ✅
-    seg_map_resized = cv2.resize(seg_map.astype(np.uint8), (rgb_image.shape[1], rgb_image.shape[0]),
-                             interpolation=cv2.INTER_NEAREST)
+    seg_map = logits.argmax(dim=1)[0].cpu().numpy()
 
-    # ✅ ADE20K construction class mappings
+    # Resize to exact original shape (safety)
+    seg_map_resized = cv2.resize(seg_map.astype(np.uint8),
+                                 (rgb_image.shape[1], rgb_image.shape[0]),
+                                 interpolation=cv2.INTER_NEAREST)
 
-    CLASS_MAP = {
-    # ─────────────────────────
-    # 🏗️ Structural Elements
-    # ─────────────────────────
-    1:  (0, 120, 255),   # wall - blue
-    2:  (200, 0, 200),   # ceiling - purple
-    3:  (255, 0, 0),     # floor - red
-    21: (0, 255, 0),     # door - green
-    23: (255, 255, 0),   # window - yellow
-
-    # ─────────────────────────
-    # 🪑 Furniture
-    # ─────────────────────────
-    24: (255, 160, 60),  # cabinet - light orange
-    28: (255, 190, 90),  # sofa - soft orange
-    31: (255, 170, 70),  # bed - warm orange
-    33: (255, 200, 100), # table - creamy orange
-    34: (255, 150, 50),  # chair - deep orange
-    37: (255, 210, 120), # shelves - pastel orange
-    38: (255, 180, 100), # drawer - tan orange
-    57: (255, 128, 0),   # furniture (misc) - bright orange
-
-    # ─────────────────────────
-    # ⚙️ Appliances
-    # ─────────────────────────
-    47: (180, 255, 180), # refrigerator - mint green
-    48: (160, 255, 160), # television - pale green
-    49: (140, 255, 140), # computer - soft green
-
-    # ─────────────────────────
-    # 🚿 Plumbing / Utilities
-    # ─────────────────────────
-    46: (0, 200, 200),   # sink - aqua
-    59: (0, 220, 200),   # bathtub - teal aqua
-
-    # ─────────────────────────
-    # 💡 Lighting
-    # ─────────────────────────
-    36: (255, 255, 180), # lamp/light - warm white
+    # ✅ Your fixed bright construction colors
+    CUSTOM_COLORS = {
+        'wall': [255, 0, 0],        # red
+        'floor': [0, 255, 0],       # green
+        'ceiling': [255, 255, 0],   # yellow
+        'windowpane': [0, 255, 255],# cyan
+        'door': [255, 165, 0],      # orange
+        'table': [128, 0, 128],     # purple
+        'cabinet': [0, 0, 255],     # blue
+        'desk': [255, 105, 180],    # pink
     }
 
-    
-    DEFAULT_COLOR = (0,0,0)  # Unknown areas
+    # ADE20K labels list (to map names → indices)
+    ADE20K_CLASSES = [
+        'wall', 'building', 'sky', 'floor', 'tree', 'ceiling', 'road', 'bed', 'windowpane',
+        'grass', 'cabinet', 'sidewalk', 'person', 'earth', 'door', 'table', 'mountain',
+        'plant', 'curtain', 'chair', 'car', 'water', 'painting', 'sofa', 'shelf', 'house',
+        'sea', 'mirror', 'rug', 'field', 'armchair', 'seat', 'fence', 'desk', 'rock',
+        'wardrobe', 'lamp', 'bathtub', 'railing', 'cushion', 'base', 'box', 'column',
+        'signboard', 'chest of drawers', 'counter', 'sand', 'sink', 'skyscraper', 'fireplace',
+        'refrigerator', 'grandstand', 'path', 'stairs', 'runway', 'case', 'pool table',
+        'pillow', 'screen door', 'stairway', 'river', 'bridge', 'bookcase', 'blind',
+        'coffee table', 'toilet', 'flower', 'book', 'hill', 'bench', 'countertop', 'stove',
+        'palm', 'kitchen island', 'computer', 'swivel chair', 'boat', 'bar', 'arcade machine',
+        'hovel', 'bus', 'towel', 'light', 'truck', 'tower', 'chandelier', 'awning',
+        'streetlight', 'booth', 'television', 'airplane', 'dirt track', 'apparel', 'pole',
+        'land', 'bannister', 'escalator', 'ottoman', 'bottle', 'buffet', 'poster', 'stage',
+        'van', 'ship', 'fountain', 'conveyer belt', 'canopy', 'washer', 'plaything',
+        'swimming pool', 'stool', 'barrel', 'basket', 'waterfall', 'tent', 'bag', 'minibike',
+        'cradle', 'oven', 'ball', 'food', 'step', 'tank', 'trade name', 'microwave', 'pot',
+        'animal', 'bicycle', 'lake', 'dishwasher', 'screen', 'blanket', 'sculpture', 'hood',
+        'sconce', 'vase', 'traffic light', 'tray', 'ashcan', 'fan', 'pier', 'crt screen',
+        'plate', 'monitor', 'bulletin board', 'shower', 'radiator', 'glass', 'clock', 'flag'
+    ]
 
-    color_mask = np.zeros_like(image)
+    # Create color mask (same shape as image)
+    color_mask = np.zeros_like(rgb_image)
 
-    for class_id, color in CLASS_MAP.items():
-        color_mask[seg_map_resized == class_id] = color
+    # Fixed seed so random colors stay consistent
+    random.seed(42)
 
-# Unknown classes kept dark gray
-    color_mask[(seg_map_resized >= 0) & (seg_map_resized <= 150)
-              & ~np.isin(seg_map_resized, list(CLASS_MAP.keys()))] = DEFAULT_COLOR
+    # Assign colors
+    for class_id, class_name in enumerate(ADE20K_CLASSES):
+        mask = seg_map_resized == class_id
+        color = CUSTOM_COLORS.get(class_name, [random.randint(0, 255) for _ in range(3)])
+        color_mask[mask] = color
 
+    # Overlay
     final = cv2.addWeighted(rgb_image, 0.6, color_mask, 0.6, 0)
     cv2.imwrite(output_path, cv2.cvtColor(final, cv2.COLOR_RGB2BGR))
 
@@ -346,7 +338,7 @@ async def compare_tours_ai(data: CompareRequest):
     seg_A_path = os.path.join(SEGMENT_DIR, f"{data.tourA}_segmented.jpg")
     seg_B_path = os.path.join(SEGMENT_DIR, f"{data.tourB}_segmented.jpg")
 
-    # ✅ Mask2Former segmentation
+    # ✅ SegFormer segmentation (ADE20K)
     run_segmentation(pathA, seg_A_path)
     run_segmentation(pathB, seg_B_path)
 
