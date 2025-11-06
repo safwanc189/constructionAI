@@ -18,6 +18,7 @@ from PIL import Image
 import torch
 import random
 import supervision as sv
+import re, ast
 
 # 1️⃣ APP SETUP
 app = FastAPI(title="Construction Monitor Stitching Service", version="1.3")
@@ -601,68 +602,122 @@ async def compare_tours_ai(data: CompareRequest):
     if not os.path.exists(pathA) or not os.path.exists(pathB):
         raise HTTPException(status_code=400, detail="One or both panoramas not found")
 
-    # ✅ YOLO-Segmentation (Instance Segmentation)
+    # Expected output paths
     yolo_A_path = os.path.join(YOLO_DIR, f"{data.tourA}_detected.jpg")
     yolo_B_path = os.path.join(YOLO_DIR, f"{data.tourB}_detected.jpg")
-
-    run_yolo_seg(pathA, yolo_A_path)
-    run_yolo_seg(pathB, yolo_B_path)
-    
-
-    # ✅ Segmentation Output Save Paths
     seg_A_path = os.path.join(SEGMENT_DIR, f"{data.tourA}_segmented.jpg")
     seg_B_path = os.path.join(SEGMENT_DIR, f"{data.tourB}_segmented.jpg")
-
-    # ✅ SegFormer segmentation (ADE20K)
-    run_segmentation(pathA, seg_A_path)
-    run_segmentation(pathB, seg_B_path)
-    
-    # ✅ Combined YOLO + SegFormer
     combined_A_path = os.path.join(COMBINED_DIR, f"{data.tourA}_combined.jpg")
     combined_B_path = os.path.join(COMBINED_DIR, f"{data.tourB}_combined.jpg")
+    report_path = os.path.join(CUSTOM_YOLO_DIR, f"{data.tourA}_vs_{data.tourB}_custom_report.txt")
 
+    # ✅ Check if outputs already exist (cache system)
+    all_exist = all(
+        os.path.exists(p)
+        for p in [
+            yolo_A_path,
+            yolo_B_path,
+            seg_A_path,
+            seg_B_path,
+            combined_A_path,
+            combined_B_path,
+            report_path,
+        ]
+    )
+
+    if all_exist:
+        print("⚡ Skipping regeneration — using cached AI comparison results.")
+
+        # Load cached text and convert into structured JSON report
+        cached_text = ""
+        structured_report = {
+             "before": {},
+             "after": {},
+             "added": {},
+             "removed": {}
+        }
+
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                cached_text = f.read()
+            # Extract sections using regex
+            before_match = re.search(r"BEFORE:\s*(\{.*?\})", cached_text)
+            after_match = re.search(r"AFTER:\s*(\{.*?\})", cached_text)
+            added = re.findall(r"ADDED\s+(\d+)x\s+(\w+)", cached_text)
+            removed = re.findall(r"REMOVED\s+(\d+)x\s+(\w+)", cached_text)
+            
+             # Parse dicts from text safely
+            if before_match:
+                structured_report["before"] = ast.literal_eval(before_match.group(1))
+            if after_match:
+                structured_report["after"] = ast.literal_eval(after_match.group(1))
+            structured_report["added"] = {label: int(count) for count, label in added}
+            structured_report["removed"] = {label: int(count) for count, label in removed}
+            
+        except Exception as e:
+            print(f"⚠️ Cached report parse failed: {e}")
+            structured_report["error"] = "Could not parse cached report"
+
+        return {
+            "message": "✅ Using cached comparison results",
+            "yolo": {
+                "tourA": f"/compare_results/yolo/{data.tourA}_detected.jpg",
+                "tourB": f"/compare_results/yolo/{data.tourB}_detected.jpg",
+            },
+            "segmentation": {
+                "tourA": f"/compare_results/segmentation/{data.tourA}_segmented.jpg",
+                "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg",
+            },
+            "combined": {
+                "tourA": f"/compare_results/combined/{data.tourA}_combined.jpg",
+                "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg",
+            },
+            "custom_yolo": {
+                "before_image": f"/compare_results/custom_yolo/{data.tourA}_custom_before.jpg",
+                "after_image": f"/compare_results/custom_yolo/{data.tourB}_custom_after.jpg",
+                "report_path": f"/compare_results/custom_yolo/{data.tourA}_vs_{data.tourB}_custom_report.txt",
+                "report": structured_report,
+            },
+        }
+
+    # 🧠 If not cached — generate everything fresh
+    print("🧩 Generating new AI comparison results...")
+
+    # YOLO Seg
+    run_yolo_seg(pathA, yolo_A_path)
+    run_yolo_seg(pathB, yolo_B_path)
+
+    # SegFormer
+    run_segmentation(pathA, seg_A_path)
+    run_segmentation(pathB, seg_B_path)
+
+    # Combined
     run_combined_segformer_yoloseg(pathA, combined_A_path)
     run_combined_segformer_yoloseg(pathB, combined_B_path)
-    
-    # ✅ 🆕 Custom YOLOv8 (best.pt) — Change Detection
+
+    # Custom YOLO (change detection)
     custom_result = run_custom_yolo_change_detection(
         model=custom_yolo_model,
         before_path=pathA,
         after_path=pathB,
         output_dir=CUSTOM_YOLO_DIR,
         tourA=data.tourA,
-        tourB=data.tourB
+        tourB=data.tourB,
     )
 
-    print("Returning:", {
-        "yolo": {
-            "tourA": f"/compare_results/yolo/{data.tourA}_detected.jpg",
-            "tourB": f"/compare_results/yolo/{data.tourB}_detected.jpg"
-        },
-        "segmentation": {
-            "tourA": f"/compare_results/segmentation/{data.tourA}_segmented.jpg",
-            "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg"
-        },
-        "combined": {
-            "tourA": f"/compare_results/combined/{data.tourA}_combined.jpg",
-            "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg"
-        },
-        "custom_yolo": custom_result
-    })
-    
     return {
         "message": "✅ Compare complete with YOLO + Segmentation",
         "yolo": {
             "tourA": f"/compare_results/yolo/{data.tourA}_detected.jpg",
-            "tourB": f"/compare_results/yolo/{data.tourB}_detected.jpg"
+            "tourB": f"/compare_results/yolo/{data.tourB}_detected.jpg",
         },
         "segmentation": {
             "tourA": f"/compare_results/segmentation/{data.tourA}_segmented.jpg",
-            "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg"
+            "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg",
         },
         "combined": {
             "tourA": f"/compare_results/combined/{data.tourA}_combined.jpg",
-            "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg"
+            "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg",
         },
         "custom_yolo": custom_result
     }

@@ -107,19 +107,19 @@ export default function PanoramaComparisonPage({
     viewMode === "yolo"
       ? yoloA
       : viewMode === "segmentation"
-      ? segA
-      : viewMode === "combined"
-      ? combinedA
-      : customBefore;
+        ? segA
+        : viewMode === "combined"
+          ? combinedA
+          : customBefore;
 
   const afterImg =
     viewMode === "yolo"
       ? yoloB
       : viewMode === "segmentation"
-      ? segB
-      : viewMode === "combined"
-      ? combinedB
-      : customAfter;
+        ? segB
+        : viewMode === "combined"
+          ? combinedB
+          : customAfter;
 
   // 🧾 Helper: render report as readable blocks
   const renderReport = (report: ChangeReport) => (
@@ -197,11 +197,10 @@ export default function PanoramaComparisonPage({
           <button
             key={btn.mode}
             onClick={() => setViewMode(btn.mode as typeof viewMode)}
-            className={`px-4 py-2 rounded-md font-semibold text-sm ${
-              viewMode === btn.mode
+            className={`px-4 py-2 rounded-md font-semibold text-sm ${viewMode === btn.mode
                 ? `${btn.color} text-white`
                 : "bg-gray-800 text-gray-300"
-            }`}
+              }`}
           >
             {btn.label}
           </button>
