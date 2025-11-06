@@ -11,12 +11,16 @@ export default function PanoramaComparisonPage({
   params: { id: string };
 }) {
   const [id, setId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"yolo" | "segmentation">("yolo");
+
+  // 🆕 Add combined mode toggle
+  const [viewMode, setViewMode] = useState<"yolo" | "segmentation" | "combined">("yolo");
 
   const [yoloA, setYoloA] = useState<string | null>(null);
   const [yoloB, setYoloB] = useState<string | null>(null);
   const [segA, setSegA] = useState<string | null>(null);
   const [segB, setSegB] = useState<string | null>(null);
+  const [combinedA, setCombinedA] = useState<string | null>(null);
+  const [combinedB, setCombinedB] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
 
@@ -39,17 +43,26 @@ export default function PanoramaComparisonPage({
     fetch(`${FASTAPI_URL}/compare-tours-ai`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // 🧠 Optional: backend can generate all 3 modes together
       body: JSON.stringify({ tourA, tourB }),
     })
       .then((res) => res.json())
       .then((data) => {
         console.log("✅ API Response:", data);
 
+        // YOLO
         setYoloA(`${FASTAPI_URL}${data.yolo.tourA}`);
         setYoloB(`${FASTAPI_URL}${data.yolo.tourB}`);
 
+        // SegFormer
         setSegA(`${FASTAPI_URL}${data.segmentation.tourA}`);
         setSegB(`${FASTAPI_URL}${data.segmentation.tourB}`);
+
+        // 🆕 Combined
+        if (data.combined) {
+          setCombinedA(`${FASTAPI_URL}${data.combined.tourA}`);
+          setCombinedB(`${FASTAPI_URL}${data.combined.tourB}`);
+        }
 
         setLoading(false);
       })
@@ -67,8 +80,20 @@ export default function PanoramaComparisonPage({
     );
   }
 
-  const beforeImg = viewMode === "yolo" ? yoloA : segA;
-  const afterImg = viewMode === "yolo" ? yoloB : segB;
+  // 🧠 Select which AI output to display
+  const beforeImg =
+    viewMode === "yolo"
+      ? yoloA
+      : viewMode === "segmentation"
+      ? segA
+      : combinedA;
+
+  const afterImg =
+    viewMode === "yolo"
+      ? yoloB
+      : viewMode === "segmentation"
+      ? segB
+      : combinedB;
 
   return (
     <div className="w-full min-h-screen bg-black flex flex-col items-center p-4">
@@ -98,6 +123,18 @@ export default function PanoramaComparisonPage({
           }`}
         >
           Segmentation
+        </button>
+
+        {/* 🆕 Combined Toggle */}
+        <button
+          onClick={() => setViewMode("combined")}
+          className={`px-4 py-2 rounded-md font-semibold text-sm ${
+            viewMode === "combined"
+              ? "bg-purple-500 text-white"
+              : "bg-gray-800 text-gray-300"
+          }`}
+        >
+          YOLO + SegFormer
         </button>
       </div>
 

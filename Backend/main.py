@@ -1,3 +1,5 @@
+#Imports
+
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,27 +17,6 @@ from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
 from PIL import Image
 import torch
 import random
-
-# Prevent CPU overload on Laptop
-torch.set_num_threads(2)
-
-# =========================================================
-# Load Models
-# =========================================================
-
-#Load yolov8n
-yolo_model = YOLO("yolov8n.pt")
-
-
-# ✅ Load SegFormer ADE20K model (lightweight and CPU-friendly)
-print("⏳ Loading SegFormer ADE20K model...")
-SEG_MODEL_ID = "nvidia/segformer-b2-finetuned-ade-512-512"
-processor = AutoImageProcessor.from_pretrained(SEG_MODEL_ID)
-seg_model = SegformerForSemanticSegmentation.from_pretrained(SEG_MODEL_ID).eval()
-print("✅ SegFormer model loaded successfully.")
-
-device = torch.device("cpu")
-seg_model.to(device)
 
 # 1️⃣ APP SETUP
 app = FastAPI(title="Construction Monitor Stitching Service", version="1.3")
@@ -65,6 +46,7 @@ app.add_middleware(
 # =========================================================
 # 3️⃣ FILE STORAGE SETUP
 # =========================================================
+
 # 🧭 Auto-detect base project directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -77,6 +59,15 @@ COMPARE_DIR = os.path.join(BASE_DIR, "compare_results")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STITCHED_DIR, exist_ok=True)
 os.makedirs(COMPARE_DIR, exist_ok=True)
+
+# 📁 Subfolders for compare results
+YOLO_DIR = os.path.join(COMPARE_DIR, "yolo")
+SEGMENT_DIR = os.path.join(COMPARE_DIR, "segmentation")
+COMBINED_DIR = os.path.join(COMPARE_DIR, "combined")
+
+os.makedirs(YOLO_DIR, exist_ok=True)
+os.makedirs(SEGMENT_DIR, exist_ok=True)
+os.makedirs(COMBINED_DIR, exist_ok=True)
 
 # 📁 Mount static directories for frontend access
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -109,6 +100,99 @@ def get_tour_files(tour_id: str):
         ])
     return files
 
+# =========================================================
+# Load Models
+# =========================================================
+
+#Load yolov8n
+yolo_model = YOLO("yolov8m-seg.pt")
+print("✅ YOLOv8-Seg model loaded successfully.")
+
+
+# ✅ Load SegFormer ADE20K model (lightweight and CPU-friendly)
+print("⏳ Loading SegFormer ADE20K model...")
+SEG_MODEL_ID = "nvidia/segformer-b2-finetuned-ade-512-512"
+processor = AutoImageProcessor.from_pretrained(SEG_MODEL_ID)
+seg_model = SegformerForSemanticSegmentation.from_pretrained(SEG_MODEL_ID).eval()
+print("✅ SegFormer model loaded successfully.")
+
+# Prevent CPU overload on Laptop
+torch.set_num_threads(2)
+
+device = torch.device("cpu")
+seg_model.to(device)
+
+
+# =========================================================
+# 🔹 YOLOv8 Instance Segmentation (Highlight Chairs & Persons)
+# =========================================================
+def run_yolo_seg(input_path: str, output_path: str):
+    """
+    Runs YOLOv8 instance segmentation on an image and highlights key objects.
+    - 'chair' → pink overlay
+    - 'person' → orange overlay
+    Other objects → green overlay (default)
+    """
+
+    # Run YOLOv8-Seg model on input image
+    results = yolo_model(input_path)
+    result = results[0]
+
+    # Load image
+    img = cv2.imread(input_path)
+    if img is None:
+        print(f"❌ Could not load image from {input_path}")
+        return
+
+    # If YOLO detected masks, process them
+    if result.masks is not None:
+        masks = result.masks.data.cpu().numpy()
+        boxes = result.boxes
+        names = yolo_model.names
+
+        for i, mask in enumerate(masks):
+            class_id = int(boxes.cls[i])
+            class_name = names[class_id]
+
+            # --- 🎨 Custom highlight colors ---
+            if class_name == "chair":
+                color = (255, 105, 180)  # pink
+            elif class_name == "person":
+                color = (255, 165, 0)    # orange
+            else:
+                color = (0, 255, 0)      # green (default)
+
+            # Resize mask to match image size
+            mask_resized = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+            mask_binary = mask_resized.astype(bool)
+
+            # Blend the color into the image (0.4 background, 0.6 color)
+            img[mask_binary] = img[mask_binary] * 0.4 + np.array(color) * 0.6
+
+        # --- 📦 Draw bounding boxes for detected objects ---
+        for box in boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            cls_name = names[int(box.cls[0])]
+            conf = float(box.conf[0])
+
+            # Reuse the same color used above (default green if not chair/person)
+            if cls_name == "chair":
+                color = (255, 105, 180)
+            elif cls_name == "person":
+                color = (255, 165, 0)
+            else:
+                color = (0, 255, 0)
+
+            # Draw bounding box
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+
+            # Add class label + confidence
+            cv2.putText(img, f"{cls_name} {conf:.2f}", (x1, max(y1 - 5, 20)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    # Save final result
+    cv2.imwrite(output_path, img)
+    print(f"✅ YOLO-Seg output saved: {output_path}")
 
 # =========================================================
 # 🔹 semantic segmentation & saves a colored overlay result
@@ -192,6 +276,133 @@ def run_segmentation(input_path, output_path):
     # Overlay
     final = cv2.addWeighted(rgb_image, 0.6, color_mask, 0.6, 0)
     cv2.imwrite(output_path, cv2.cvtColor(final, cv2.COLOR_RGB2BGR))
+    
+
+# =========================================================
+# 🔹 Combined YOLO-Seg + SegFormer Semantic Overlay
+# =========================================================
+def run_combined_segformer_yoloseg(input_path: str, output_path: str):
+    """
+    Combines SegFormer (semantic segmentation) + YOLOv8-Seg (instance segmentation)
+    into one intelligent visual output.
+    """
+
+    image = cv2.imread(input_path)
+    if image is None:
+        print(f"❌ Error: Could not load image from {input_path}")
+        return
+
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(rgb_image)
+    H, W, _ = rgb_image.shape
+
+    # =====================================================
+    # 1️⃣ Run SegFormer (structure segmentation)
+    # =====================================================
+    inputs = processor(images=pil_image, return_tensors="pt")
+    with torch.no_grad():
+        outputs = seg_model(**inputs)
+
+    logits = torch.nn.functional.interpolate(
+        outputs.logits, size=pil_image.size[::-1], mode="bilinear", align_corners=False
+    )
+    seg_map = logits.argmax(dim=1)[0].cpu().numpy()
+
+    CUSTOM_COLORS = {
+        'wall': [255, 0, 0],
+        'floor': [0, 255, 0],
+        'ceiling': [255, 255, 0],
+        'windowpane': [0, 255, 255],
+        'door': [255, 165, 0],
+        'table': [128, 0, 128],
+        'cabinet': [0, 0, 255],
+        'desk': [255, 105, 180],
+    }
+
+    color_mask = np.zeros_like(rgb_image)
+    random.seed(42)
+
+    ADE20K_CLASSES = [
+        'wall', 'building', 'sky', 'floor', 'tree', 'ceiling', 'road', 'bed', 'windowpane',
+        'grass', 'cabinet', 'sidewalk', 'person', 'earth', 'door', 'table', 'mountain',
+        'plant', 'curtain', 'chair', 'car', 'water', 'painting', 'sofa', 'shelf', 'house',
+        'sea', 'mirror', 'rug', 'field', 'armchair', 'seat', 'fence', 'desk', 'rock',
+        'wardrobe', 'lamp', 'bathtub', 'railing', 'cushion', 'base', 'box', 'column',
+        'signboard', 'chest of drawers', 'counter', 'sand', 'sink', 'skyscraper', 'fireplace',
+        'refrigerator', 'grandstand', 'path', 'stairs', 'runway', 'case', 'pool table',
+        'pillow', 'screen door', 'stairway', 'river', 'bridge', 'bookcase', 'blind',
+        'coffee table', 'toilet', 'flower', 'book', 'hill', 'bench', 'countertop', 'stove',
+        'palm', 'kitchen island', 'computer', 'swivel chair', 'boat', 'bar', 'arcade machine',
+        'hovel', 'bus', 'towel', 'light', 'truck', 'tower', 'chandelier', 'awning',
+        'streetlight', 'booth', 'television', 'airplane', 'dirt track', 'apparel', 'pole',
+        'land', 'bannister', 'escalator', 'ottoman', 'bottle', 'buffet', 'poster', 'stage',
+        'van', 'ship', 'fountain', 'conveyer belt', 'canopy', 'washer', 'plaything',
+        'swimming pool', 'stool', 'barrel', 'basket', 'waterfall', 'tent', 'bag', 'minibike',
+        'cradle', 'oven', 'ball', 'food', 'step', 'tank', 'trade name', 'microwave', 'pot',
+        'animal', 'bicycle', 'lake', 'dishwasher', 'screen', 'blanket', 'sculpture', 'hood',
+        'sconce', 'vase', 'traffic light', 'tray', 'ashcan', 'fan', 'pier', 'crt screen',
+        'plate', 'monitor', 'bulletin board', 'shower', 'radiator', 'glass', 'clock', 'flag'
+    ]
+
+    for class_id, class_name in enumerate(ADE20K_CLASSES):
+        mask = seg_map == class_id
+        color = CUSTOM_COLORS.get(class_name, [random.randint(0, 255) for _ in range(3)])
+        color_mask[mask] = color
+
+    segformer_overlay = cv2.addWeighted(rgb_image, 0.5, color_mask, 0.5, 0)
+
+    # =====================================================
+    # 2️⃣ Run YOLOv8-Seg (object segmentation)
+    # =====================================================
+    results = yolo_model(rgb_image, verbose=False)
+    combined = segformer_overlay.copy()
+
+    for result in results:
+        if result.masks is None:
+             continue
+
+        boxes = result.boxes
+        masks = result.masks.data.cpu().numpy()
+        names = yolo_model.names
+
+        for i, mask in enumerate(masks):
+            class_id = int(boxes.cls[i])
+            class_name = names[class_id]
+
+            # --- 🎨 Custom highlight colors ---
+            if class_name == "chair":
+                 color = (255, 105, 180)  # pink
+            elif class_name == "person":
+                 color = (255, 165, 0)    # orange
+            else:
+                 color = (0, 255, 0)      # green (default)
+
+        # --- 🩵 Apply segmentation mask ---
+            mask_resized = cv2.resize(mask, (W, H), interpolation=cv2.INTER_NEAREST)
+            mask_binary = mask_resized.astype(bool)
+            combined[mask_binary] = combined[mask_binary] * 0.5 + np.array(color) * 0.5
+
+        # --- 🟩 Draw bounding box + label ---
+            x1, y1, x2, y2 = map(int, boxes.xyxy[i])
+            conf = float(boxes.conf[i])
+            label_text = f"{class_name} {conf:.2f}"
+
+        # Draw bounding box with same color
+            cv2.rectangle(combined, (x1, y1), (x2, y2), color, 2)
+
+        # Draw label background (black rectangle behind text)
+            (tw, th), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(combined, (x1, y1 - th - 6), (x1 + tw + 2, y1), (0, 0, 0), -1)
+
+        # Put white label text
+            cv2.putText(combined, label_text, (x1, y1 - 5),
+                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+
+    # Save
+    cv2.imwrite(output_path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+    print(f"✅ Combined YOLO+SegFormer output saved: {output_path}")
+
 
 # =========================================================
 # 4️⃣ API ROUTES
@@ -305,16 +516,7 @@ async def stitch_panorama(tour_id: str):
 class CompareRequest(BaseModel):
     tourA: str
     tourB: str
-
-COMPARE_DIR = "compare_results"
-os.makedirs(COMPARE_DIR, exist_ok=True)
-
-YOLO_DIR = os.path.join(COMPARE_DIR, "yolo")
-SEGMENT_DIR = os.path.join(COMPARE_DIR, "segmentation")
-
-os.makedirs(YOLO_DIR, exist_ok=True)
-os.makedirs(SEGMENT_DIR, exist_ok=True)
-
+    
 @app.post("/compare-tours-ai")
 async def compare_tours_ai(data: CompareRequest):
     pathA = os.path.join(STITCHED_DIR, f"{data.tourA}_panorama.jpg")
@@ -323,15 +525,12 @@ async def compare_tours_ai(data: CompareRequest):
     if not os.path.exists(pathA) or not os.path.exists(pathB):
         raise HTTPException(status_code=400, detail="One or both panoramas not found")
 
-    # ✅ YOLO Detection
+    # ✅ YOLO-Segmentation (Instance Segmentation)
     yolo_A_path = os.path.join(YOLO_DIR, f"{data.tourA}_detected.jpg")
     yolo_B_path = os.path.join(YOLO_DIR, f"{data.tourB}_detected.jpg")
 
-    results_A = yolo_model(pathA)
-    results_A[0].save(yolo_A_path)
-
-    results_B = yolo_model(pathB)
-    results_B[0].save(yolo_B_path)
+    run_yolo_seg(pathA, yolo_A_path)
+    run_yolo_seg(pathB, yolo_B_path)
     
 
     # ✅ Segmentation Output Save Paths
@@ -341,6 +540,13 @@ async def compare_tours_ai(data: CompareRequest):
     # ✅ SegFormer segmentation (ADE20K)
     run_segmentation(pathA, seg_A_path)
     run_segmentation(pathB, seg_B_path)
+    
+    # ✅ Combined YOLO + SegFormer
+    combined_A_path = os.path.join(COMBINED_DIR, f"{data.tourA}_combined.jpg")
+    combined_B_path = os.path.join(COMBINED_DIR, f"{data.tourB}_combined.jpg")
+
+    run_combined_segformer_yoloseg(pathA, combined_A_path)
+    run_combined_segformer_yoloseg(pathB, combined_B_path)
 
     print("Returning:", {
         "yolo": {
@@ -350,6 +556,10 @@ async def compare_tours_ai(data: CompareRequest):
         "segmentation": {
             "tourA": f"/compare_results/segmentation/{data.tourA}_segmented.jpg",
             "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg"
+        },
+        "combined": {
+            "tourA": f"/compare_results/combined/{data.tourA}_combined.jpg",
+            "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg"
         }
     })
     
@@ -362,6 +572,10 @@ async def compare_tours_ai(data: CompareRequest):
         "segmentation": {
             "tourA": f"/compare_results/segmentation/{data.tourA}_segmented.jpg",
             "tourB": f"/compare_results/segmentation/{data.tourB}_segmented.jpg"
+        },
+        "combined": {
+            "tourA": f"/compare_results/combined/{data.tourA}_combined.jpg",
+            "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg"
         }
     }
 
