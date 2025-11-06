@@ -17,6 +17,7 @@ from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
 from PIL import Image
 import torch
 import random
+import supervision as sv
 
 # 1️⃣ APP SETUP
 app = FastAPI(title="Construction Monitor Stitching Service", version="1.3")
@@ -64,10 +65,12 @@ os.makedirs(COMPARE_DIR, exist_ok=True)
 YOLO_DIR = os.path.join(COMPARE_DIR, "yolo")
 SEGMENT_DIR = os.path.join(COMPARE_DIR, "segmentation")
 COMBINED_DIR = os.path.join(COMPARE_DIR, "combined")
+CUSTOM_YOLO_DIR = os.path.join(COMPARE_DIR, "custom_yolo")
 
 os.makedirs(YOLO_DIR, exist_ok=True)
 os.makedirs(SEGMENT_DIR, exist_ok=True)
 os.makedirs(COMBINED_DIR, exist_ok=True)
+os.makedirs(CUSTOM_YOLO_DIR, exist_ok=True)
 
 # 📁 Mount static directories for frontend access
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -122,6 +125,10 @@ torch.set_num_threads(2)
 device = torch.device("cpu")
 seg_model.to(device)
 
+
+print("⏳ Loading custom trained YOLOv8 model (best.pt)...")
+custom_yolo_model = YOLO("best.pt")
+print("✅ Custom YOLOv8 model loaded successfully.")
 
 # =========================================================
 # 🔹 YOLOv8 Instance Segmentation (Highlight Chairs & Persons)
@@ -403,6 +410,75 @@ def run_combined_segformer_yoloseg(input_path: str, output_path: str):
     cv2.imwrite(output_path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
     print(f"✅ Combined YOLO+SegFormer output saved: {output_path}")
 
+# =========================================================
+# 🔹Own yolomodel
+# =========================================================
+def run_custom_yolo_change_detection(model, before_path, after_path, output_dir, tourA, tourB):
+    """
+    Runs your custom YOLOv8 change detection (best.pt)
+    on the stitched panoramas, saves annotated images and report.
+    """
+
+    def analyze(image_path):
+        image = cv2.imread(image_path)
+        if image is None:
+            print(f"❌ Error: Could not load image {image_path}")
+            return None, {}
+        results = model(image)
+        detections = sv.Detections.from_ultralytics(results[0])
+        mask_annotator = sv.MaskAnnotator(opacity=0.7)
+        label_annotator = sv.LabelAnnotator(text_scale=0.6, text_padding=5, text_position=sv.Position.CENTER)
+
+        annotated = mask_annotator.annotate(scene=image.copy(), detections=detections)
+        annotated = label_annotator.annotate(scene=annotated, detections=detections)
+
+        # count detected classes
+        counts = {}
+        if results[0].boxes:
+            for cls_id in results[0].boxes.cls:
+                cls_name = model.names[int(cls_id)]
+                counts[cls_name] = counts.get(cls_name, 0) + 1
+
+        return annotated, counts
+
+    before_img, counts_before = analyze(before_path)
+    after_img, counts_after = analyze(after_path)
+
+    before_out = os.path.join(output_dir, f"{tourA}_custom_before.jpg")
+    after_out = os.path.join(output_dir, f"{tourB}_custom_after.jpg")
+
+    cv2.imwrite(before_out, before_img)
+    cv2.imwrite(after_out, after_img)
+
+    # Compare object differences
+    report = {"before": counts_before, "after": counts_after, "added": {}, "removed": {}}
+    all_classes = set(counts_before.keys()) | set(counts_after.keys())
+
+    for cls in all_classes:
+        b = counts_before.get(cls, 0)
+        a = counts_after.get(cls, 0)
+        if a > b:
+            report["added"][cls] = a - b
+        elif b > a:
+            report["removed"][cls] = b - a
+
+    # Save text report
+    report_path = os.path.join(output_dir, f"{tourA}_vs_{tourB}_custom_report.txt")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("📊 CHANGE DETECTION REPORT 📊\n\n")
+        f.write(f"BEFORE: {counts_before}\n")
+        f.write(f"AFTER: {counts_after}\n\n")
+        for k, v in report["added"].items():
+            f.write(f"✅ ADDED {v}x {k}\n")
+        for k, v in report["removed"].items():
+            f.write(f"❌ REMOVED {v}x {k}\n")
+
+    return {
+        "before_image": f"/compare_results/custom_yolo/{tourA}_custom_before.jpg",
+        "after_image": f"/compare_results/custom_yolo/{tourB}_custom_after.jpg",
+        "report_path": f"/compare_results/custom_yolo/{tourA}_vs_{tourB}_custom_report.txt",
+        "report": report,
+    }
 
 # =========================================================
 # 4️⃣ API ROUTES
@@ -547,6 +623,16 @@ async def compare_tours_ai(data: CompareRequest):
 
     run_combined_segformer_yoloseg(pathA, combined_A_path)
     run_combined_segformer_yoloseg(pathB, combined_B_path)
+    
+    # ✅ 🆕 Custom YOLOv8 (best.pt) — Change Detection
+    custom_result = run_custom_yolo_change_detection(
+        model=custom_yolo_model,
+        before_path=pathA,
+        after_path=pathB,
+        output_dir=CUSTOM_YOLO_DIR,
+        tourA=data.tourA,
+        tourB=data.tourB
+    )
 
     print("Returning:", {
         "yolo": {
@@ -560,7 +646,8 @@ async def compare_tours_ai(data: CompareRequest):
         "combined": {
             "tourA": f"/compare_results/combined/{data.tourA}_combined.jpg",
             "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg"
-        }
+        },
+        "custom_yolo": custom_result
     })
     
     return {
@@ -576,7 +663,8 @@ async def compare_tours_ai(data: CompareRequest):
         "combined": {
             "tourA": f"/compare_results/combined/{data.tourA}_combined.jpg",
             "tourB": f"/compare_results/combined/{data.tourB}_combined.jpg"
-        }
+        },
+        "custom_yolo": custom_result
     }
 
 
