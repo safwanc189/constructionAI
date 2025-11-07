@@ -6,6 +6,39 @@ import { Loader2 } from "lucide-react";
 // 🌍 Backend URL
 const FASTAPI_URL = "http://localhost:8000";
 
+// 📄 Handle PDF Download
+const downloadPDFReport = async (id: string | null) => {
+  if (!id) return;
+  const [tourA, tourB] = id.split("_");
+
+  try {
+    const response = await fetch(`${FASTAPI_URL}/generate-pdf-report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tourA, tourB }),
+    });
+
+    if (!response.ok) {
+      alert("❌ Failed to generate PDF report");
+      return;
+    }
+
+    // ✅ Convert to blob and trigger browser download
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ConstructionAI_Report_${tourA}_vs_${tourB}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error("❌ PDF Download Error:", err);
+    alert("PDF download failed. Please check the backend.");
+  }
+};
+
 // ✅ Type definitions for report
 interface ChangeReport {
   before: Record<string, number>;
@@ -198,8 +231,8 @@ export default function PanoramaComparisonPage({
             key={btn.mode}
             onClick={() => setViewMode(btn.mode as typeof viewMode)}
             className={`px-4 py-2 rounded-md font-semibold text-sm ${viewMode === btn.mode
-                ? `${btn.color} text-white`
-                : "bg-gray-800 text-gray-300"
+              ? `${btn.color} text-white`
+              : "bg-gray-800 text-gray-300"
               }`}
           >
             {btn.label}
@@ -233,7 +266,19 @@ export default function PanoramaComparisonPage({
       </div>
 
       {/* 🧾 Custom YOLO Report */}
-      {viewMode === "custom_yolo" && customReport && renderReport(customReport)}
+      {viewMode === "custom_yolo" && customReport && (
+        <div className="flex flex-col items-center">
+          {renderReport(customReport)}
+
+          {/* 📄 Download Report Button */}
+          <button
+            onClick={() => downloadPDFReport(id)}
+            className="mt-5 px-6 py-2 bg-orange-600 hover:bg-orange-700 text-white font-semibold rounded-lg shadow-md transition"
+          >
+            📄 Download Full PDF Report
+          </button>
+        </div>
+      )}
 
       {/* Footer */}
       <p className="text-gray-500 text-xs mt-6">Compare ID: {id}</p>

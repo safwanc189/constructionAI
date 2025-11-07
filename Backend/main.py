@@ -1,4 +1,6 @@
-#Imports
+# ---------------------------------------------------------
+# Imports
+# ---------------------------------------------------------
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -19,8 +21,12 @@ import torch
 import random
 import supervision as sv
 import re, ast
+from fpdf import FPDF
+from datetime import datetime
 
+# ---------------------------------------------------------
 # 1️⃣ APP SETUP
+# ---------------------------------------------------------
 app = FastAPI(title="Construction Monitor Stitching Service", version="1.3")
 
 logging.basicConfig(
@@ -56,6 +62,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "temp_uploads")
 STITCHED_DIR = os.path.join(BASE_DIR, "stitched_panoramas")
 COMPARE_DIR = os.path.join(BASE_DIR, "compare_results")
+MODEL_DIR = os.path.join(BASE_DIR, "models")
 
 # ✅ Ensure all directories exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -67,11 +74,13 @@ YOLO_DIR = os.path.join(COMPARE_DIR, "yolo")
 SEGMENT_DIR = os.path.join(COMPARE_DIR, "segmentation")
 COMBINED_DIR = os.path.join(COMPARE_DIR, "combined")
 CUSTOM_YOLO_DIR = os.path.join(COMPARE_DIR, "custom_yolo")
+PDF_DIR = os.path.join(COMPARE_DIR, "pdf")
 
 os.makedirs(YOLO_DIR, exist_ok=True)
 os.makedirs(SEGMENT_DIR, exist_ok=True)
 os.makedirs(COMBINED_DIR, exist_ok=True)
 os.makedirs(CUSTOM_YOLO_DIR, exist_ok=True)
+os.makedirs(PDF_DIR, exist_ok=True)
 
 # 📁 Mount static directories for frontend access
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -109,7 +118,7 @@ def get_tour_files(tour_id: str):
 # =========================================================
 
 #Load yolov8n
-yolo_model = YOLO("yolov8m-seg.pt")
+yolo_model = YOLO(os.path.join(MODEL_DIR, "yolov8m-seg.pt"))
 print("✅ YOLOv8-Seg model loaded successfully.")
 
 
@@ -128,7 +137,7 @@ seg_model.to(device)
 
 
 print("⏳ Loading custom trained YOLOv8 model (best.pt)...")
-custom_yolo_model = YOLO("best.pt")
+custom_yolo_model = YOLO(os.path.join(MODEL_DIR, "best.pt"))
 print("✅ Custom YOLOv8 model loaded successfully.")
 
 # =========================================================
@@ -490,7 +499,6 @@ def root():
     """Health check route — confirms backend is running."""
     return {"message": "✅ FastAPI Stitching Service is live and running!"}
 
-
 # ---------------------------------------------------------
 # Upload Endpoint
 # ---------------------------------------------------------
@@ -730,6 +738,123 @@ async def get_compare_result(filename: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Diff image not found")
     return FileResponse(file_path)
+
+
+# ---------------------------------------------------------
+# Generate report pdf
+# ---------------------------------------------------------
+
+@app.post("/generate-pdf-report")
+async def generate_pdf_report(data: CompareRequest):
+    tourA, tourB = data.tourA, data.tourB
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # --- Paths ---
+    before_img = os.path.join(COMPARE_DIR, "custom_yolo", f"{tourA}_custom_before.jpg")
+    after_img = os.path.join(COMPARE_DIR, "custom_yolo", f"{tourB}_custom_after.jpg")
+    yolo_imgA = os.path.join(COMPARE_DIR, "yolo", f"{tourA}_detected.jpg")
+    yolo_imgB = os.path.join(COMPARE_DIR, "yolo", f"{tourB}_detected.jpg")
+    seg_imgA = os.path.join(COMPARE_DIR, "segmentation", f"{tourA}_segmented.jpg")
+    seg_imgB = os.path.join(COMPARE_DIR, "segmentation", f"{tourB}_segmented.jpg")
+    combined_imgA = os.path.join(COMPARE_DIR, "combined", f"{tourA}_combined.jpg")
+    combined_imgB = os.path.join(COMPARE_DIR, "combined", f"{tourB}_combined.jpg")
+
+    # --- Create PDF folder ---
+    PDF_DIR = os.path.join(COMPARE_DIR, "pdf")
+    os.makedirs(PDF_DIR, exist_ok=True)
+    pdf_path = os.path.join(PDF_DIR, f"{tourA}_vs_{tourB}_AI_Report.pdf")
+
+    # --- Parse text report ---
+    report_path = os.path.join(COMPARE_DIR, "custom_yolo", f"{tourA}_vs_{tourB}_custom_report.txt")
+    structured_report = {"before": {}, "after": {}, "added": {}, "removed": {}}
+    try:
+        with open(report_path, "r", encoding="utf-8") as f:
+            text = f.read()
+        before_match = re.search(r"BEFORE:\s*(\{.*?\})", text)
+        after_match = re.search(r"AFTER:\s*(\{.*?\})", text)
+        added = re.findall(r"ADDED\s+(\d+)x\s+(\w+)", text)
+        removed = re.findall(r"REMOVED\s+(\d+)x\s+(\w+)", text)
+        if before_match:
+            structured_report["before"] = ast.literal_eval(before_match.group(1))
+        if after_match:
+            structured_report["after"] = ast.literal_eval(after_match.group(1))
+        structured_report["added"] = {label: int(count) for count, label in added}
+        structured_report["removed"] = {label: int(count) for count, label in removed}
+    except Exception as e:
+        structured_report["error"] = f"Could not parse report: {e}"
+
+    # 🧾 Start PDF
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # --- PAGE 1 ---
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, "ConstructionAI - Custom Model Comparison Report", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 12)
+    pdf.cell(0, 8, f"Generated on: {timestamp}", ln=True, align="C")
+    pdf.ln(10)
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "Own Model (best.pt) - Change Detection", ln=True, align="L")
+    pdf.ln(5)
+
+    # --- BEFORE / AFTER IMAGES ---
+    y_start = pdf.get_y()
+    img_height = 85
+    img_width = 95
+    pdf.image(before_img, x=8, y=y_start, w=img_width, h=img_height)
+    pdf.image(after_img, x=107, y=y_start, w=img_width, h=img_height)
+    pdf.ln(img_height + 15)
+
+    # --- COMPARISON SUMMARY ---
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "Comparison Summary", ln=True, align="C")
+    pdf.ln(5)
+    pdf.set_font("Helvetica", "", 12)
+
+    for cls, count in structured_report.get("added", {}).items():
+        pdf.cell(0, 7, f"Added {count}x {cls}", ln=True, align="C")
+    for cls, count in structured_report.get("removed", {}).items():
+        pdf.cell(0, 7, f"Removed {count}x {cls}", ln=True, align="C")
+    pdf.ln(5)
+
+    before_summary = ", ".join([f"{k}={v}" for k, v in structured_report["before"].items()])
+    after_summary = ", ".join([f"{k}={v}" for k, v in structured_report["after"].items()])
+
+    pdf.set_font("Helvetica", "I", 11)
+    pdf.multi_cell(0, 6, f"Before: {before_summary}", align="C")
+    pdf.multi_cell(0, 6, f"After:  {after_summary}", align="C")
+
+    # --- PAGE 2 ---
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, "Other AI Model Comparisons", ln=True, align="C")
+    pdf.ln(8)
+
+    models = [
+        ("YOLOv8-Segmentation", yolo_imgA, yolo_imgB),
+        ("SegFormer (Semantic Segmentation)", seg_imgA, seg_imgB),
+        ("Combined YOLO + SegFormer", combined_imgA, combined_imgB),
+    ]
+
+    img_w, img_h = 90, 60
+    for title, imgA, imgB in models:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, title, ln=True, align="L")
+        y = pdf.get_y()
+        pdf.image(imgA, x=10, y=y, w=img_w, h=img_h)
+        pdf.image(imgB, x=110, y=y, w=img_w, h=img_h)
+        pdf.ln(img_h + 10)
+
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(0, 10, "ConstructionAI © 2025 | AI-powered site monitoring", 0, 0, "C")
+
+    # --- SAVE ---
+    pdf.output(pdf_path)
+    print(f"📄 Professional PDF Report generated: {pdf_path}")
+    return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
 # =========================================================
 # 5️⃣ RUN SERVER
 # =========================================================
