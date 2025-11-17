@@ -59,14 +59,12 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 🗂 Define folders dynamically
-UPLOAD_DIR = os.path.join(BASE_DIR, "temp_uploads")
-STITCHED_DIR = os.path.join(BASE_DIR, "stitched_panoramas")
+VIRTUAL_TOURS_DIR = os.path.join(BASE_DIR, "virtual_tours")
+os.makedirs(VIRTUAL_TOURS_DIR, exist_ok=True)
 COMPARE_DIR = os.path.join(BASE_DIR, "compare_results")
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 
 # ✅ Ensure all directories exist
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(STITCHED_DIR, exist_ok=True)
 os.makedirs(COMPARE_DIR, exist_ok=True)
 
 # 📁 Subfolders for compare results
@@ -83,8 +81,7 @@ os.makedirs(CUSTOM_YOLO_DIR, exist_ok=True)
 os.makedirs(PDF_DIR, exist_ok=True)
 
 # 📁 Mount static directories for frontend access
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-app.mount("/panoramas", StaticFiles(directory=STITCHED_DIR), name="panoramas")
+app.mount("/virtual_tours", StaticFiles(directory=VIRTUAL_TOURS_DIR), name="virtual_tours")
 app.mount("/compare_results", StaticFiles(directory=COMPARE_DIR), name="compare_results")
 
 
@@ -96,7 +93,8 @@ def get_tour_files(tour_id: str):
     Returns all image file paths for the given tour_id, sorted by frame number.
     Expected naming: frame-0.jpg, frame-1.jpg, ...
     """
-    tour_dir = os.path.join(UPLOAD_DIR, tour_id)
+    tour_dir = os.path.join(VIRTUAL_TOURS_DIR, tour_id, "frames")
+    os.makedirs(tour_dir, exist_ok=True)
     if not os.path.isdir(tour_dir):
         return []
 
@@ -506,10 +504,10 @@ def root():
 async def upload_image_file(tour_id: str, file: UploadFile = File(...)):
     """
     Uploads a single frame image and stores it in:
-        temp_uploads/<tour_id>/<filename>
+        virtual_tours/<tour_id>/frames/<filename>
     """
     try:
-        tour_dir = os.path.join(UPLOAD_DIR, tour_id)
+        tour_dir = os.path.join(VIRTUAL_TOURS_DIR, tour_id, "frames")
         os.makedirs(tour_dir, exist_ok=True)
 
         file_path = os.path.join(tour_dir, file.filename)
@@ -518,7 +516,7 @@ async def upload_image_file(tour_id: str, file: UploadFile = File(...)):
 
         logging.info(f"📸 Saved frame: {file.filename} (Tour ID: {tour_id})")
 
-        image_url = f"/uploads/{tour_id}/{file.filename}"
+        image_url = f"/virtual_tours/{tour_id}/frames/{file.filename}"
         return {"filename": file.filename, "imageUrl": image_url}
 
     except Exception as e:
@@ -538,17 +536,19 @@ async def stitch_panorama(tour_id: str):
     logging.info(f"🧵 Stitching requested for tour: {tour_id}")
 
     # 🔹 1️⃣ Check if panorama already exists
-    output_filename = f"{tour_id}_panorama.jpg"
-    output_path = os.path.join(STITCHED_DIR, output_filename)
+    panorama_dir = os.path.join(VIRTUAL_TOURS_DIR, tour_id, "panorama")
+    os.makedirs(panorama_dir, exist_ok=True)
+
+    output_path = os.path.join(panorama_dir, "panorama.jpg")
     if os.path.exists(output_path):
-        logging.info(f"🖼️ Panorama already exists for {tour_id}, skipping stitching.")
-        return {
-            "message": "✅ Panorama already exists, skipping stitching.",
-            "tour_id": tour_id,
-            "status": "exists",
-            "saved_as": output_filename,
-            "finalPanoramaUrl": f"/panoramas/{output_filename}",
-        }
+      logging.info(f"🖼️ Panorama already exists for {tour_id}, skipping stitching.")
+      return {
+        "message": "✅ Panorama already exists, skipping stitching.",
+        "tour_id": tour_id,
+        "status": "exists",
+        "saved_as": "panorama.jpg",
+        "finalPanoramaUrl": f"/virtual_tours/{tour_id}/panorama/panorama.jpg",
+    }
 
     # 🔹 2️⃣ Load uploaded images
     image_files = get_tour_files(tour_id)
@@ -590,8 +590,8 @@ async def stitch_panorama(tour_id: str):
         "message": f"✅ Stitching completed in {duration:.2f}s",
         "tour_id": tour_id,
         "status": int(status),
-        "saved_as": output_filename,
-        "finalPanoramaUrl": f"/panoramas/{output_filename}",
+        "saved_as": "panorama.jpg",
+        "finalPanoramaUrl": f"/virtual_tours/{tour_id}/panorama/panorama.jpg",
     }
 
 
@@ -604,8 +604,8 @@ class CompareRequest(BaseModel):
     
 @app.post("/compare-tours-ai")
 async def compare_tours_ai(data: CompareRequest):
-    pathA = os.path.join(STITCHED_DIR, f"{data.tourA}_panorama.jpg")
-    pathB = os.path.join(STITCHED_DIR, f"{data.tourB}_panorama.jpg")
+    pathA = os.path.join(VIRTUAL_TOURS_DIR, data.tourA, "panorama", "panorama.jpg")
+    pathB = os.path.join(VIRTUAL_TOURS_DIR, data.tourB, "panorama", "panorama.jpg")
 
     if not os.path.exists(pathA) or not os.path.exists(pathB):
         raise HTTPException(status_code=400, detail="One or both panoramas not found")

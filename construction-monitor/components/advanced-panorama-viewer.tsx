@@ -32,7 +32,7 @@ export function AdvancedPanoramaViewer({ tour }: { tour: VirtualTour }) {
 
   //Backend and panorama urls
   const backendUrl = "http://localhost:8000"
-  const stitchedUrl = `${backendUrl}/panoramas/${tour.id}_panorama.jpg`
+  const stitchedUrl = `${backendUrl}/virtual_tours/${tour.id}/panorama/panorama.jpg`
 
   // 🧩 Initialize 360° viewer (default)
   useEffect(() => {
