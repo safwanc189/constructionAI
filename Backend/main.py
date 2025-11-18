@@ -23,6 +23,7 @@ import supervision as sv
 import re, ast
 from fpdf import FPDF
 from datetime import datetime
+from pymongo import MongoClient
 
 # ---------------------------------------------------------
 # 1️⃣ APP SETUP
@@ -50,6 +51,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# =========================================================
+#  MongoDB SETUP
+# =========================================================
+MONGO_URI = "mongodb://localhost:27017"
+client = MongoClient(MONGO_URI)
+db = client["construction_ai"]
+floorplans_collection = db["floorplans"]
+
 
 # =========================================================
 # 3️⃣ FILE STORAGE SETUP
@@ -62,9 +71,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VIRTUAL_TOURS_DIR = os.path.join(BASE_DIR, "virtual_tours")
 os.makedirs(VIRTUAL_TOURS_DIR, exist_ok=True)
 COMPARE_DIR = os.path.join(BASE_DIR, "compare_results")
+# 📁 Floor plan uploads directory
+FLOORPLANS_DIR = os.path.join(BASE_DIR, "floorplans")
+os.makedirs(FLOORPLANS_DIR, exist_ok=True)
 MODEL_DIR = os.path.join(BASE_DIR, "models")
-
-# ✅ Ensure all directories exist
 os.makedirs(COMPARE_DIR, exist_ok=True)
 
 # 📁 Subfolders for compare results
@@ -83,7 +93,7 @@ os.makedirs(PDF_DIR, exist_ok=True)
 # 📁 Mount static directories for frontend access
 app.mount("/virtual_tours", StaticFiles(directory=VIRTUAL_TOURS_DIR), name="virtual_tours")
 app.mount("/compare_results", StaticFiles(directory=COMPARE_DIR), name="compare_results")
-
+app.mount("/floorplans", StaticFiles(directory=FLOORPLANS_DIR), name="floorplans")
 
 # =========================================================
 # 🔹 Get all uploaded image files for a tour
@@ -496,6 +506,75 @@ def run_custom_yolo_change_detection(model, before_path, after_path, output_dir,
 def root():
     """Health check route — confirms backend is running."""
     return {"message": "✅ FastAPI Stitching Service is live and running!"}
+
+# ---------------------------------------------------------
+# Floor Plan Upload Endpoint
+# ---------------------------------------------------------
+@app.post("/upload-floorplan")
+async def upload_floorplan(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    scale: float = Form(...),
+    rotation: float = Form(...),
+    origin_lat: float = Form(...),
+    origin_lon: float = Form(...),
+    width: int = Form(...),
+    height: int = Form(...),
+):
+    """
+    Uploads a floor plan image and stores it as:
+        floorplans/<generated_id>.jpg>
+    Also saves metadata in MongoDB + returns metadata to frontend.
+    """
+
+    try:
+        # 1️⃣ CREATE UNIQUE FILE NAME
+        floorplan_id = f"floorplan_{int(time.time())}"
+        filename = f"{floorplan_id}.jpg"
+
+        # 2️⃣ SAVE IMAGE TO DISK
+        file_path = os.path.join(FLOORPLANS_DIR, filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # 3️⃣ PUBLIC URL (StaticFiles)
+        image_url = f"/floorplans/{filename}"
+
+        # 4️⃣ BUILD METADATA
+        floorplan_metadata = {
+            "id": floorplan_id,
+            "name": name,
+            "imageUrl": image_url,
+            "scale": scale,
+            "rotation": rotation,
+            "origin": {
+                "latitude": origin_lat,
+                "longitude": origin_lon,
+            },
+            "bounds": {
+                "width": width,
+                "height": height,
+            },
+        }
+
+        logging.info(f"📐 Floor Plan Uploaded: {floorplan_metadata}")
+
+        # 5️⃣ SAVE TO MONGODB  ⭐⭐ NEW ⭐⭐
+        result = floorplans_collection.insert_one(floorplan_metadata)
+
+        # ⭐ FIX: Convert MongoDB ObjectId → string so FastAPI can return it
+        floorplan_metadata["_id"] = str(result.inserted_id)
+        logging.info(f"🗄️ Saved floor plan to MongoDB: {floorplan_metadata['_id']}")
+
+        # 6️⃣ RETURN TO FRONTEND
+        return {
+            "message": "Floor plan uploaded successfully",
+            "floorPlan": floorplan_metadata,
+        }
+
+    except Exception as e:
+        logging.error(f"❌ Floor plan upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
 # ---------------------------------------------------------
 # Upload Endpoint

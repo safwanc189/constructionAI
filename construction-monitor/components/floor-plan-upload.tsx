@@ -21,10 +21,14 @@ export function FloorPlanUpload() {
   const [origin, setOrigin] = useState<GPSCoordinate | null>(null)
   const [isSettingOrigin, setIsSettingOrigin] = useState(false)
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 })
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
+
+    setSelectedFile(file); // ⭐ needed for backend API
 
     const reader = new FileReader()
     reader.onload = (e) => {
@@ -71,30 +75,68 @@ export function FloorPlanUpload() {
   }
 
   const handleSave = async () => {
-    if (!floorPlanImage || !origin) {
-      alert("Please upload a floor plan and set the origin GPS coordinates.")
-      return
-    }
-
-    const floorPlan: FloorPlan = {
-      id: `floorplan-${Date.now()}`,
-      name: floorPlanName || "Untitled Floor Plan",
-      imageUrl: floorPlanImage,
-      scale,
-      origin,
-      rotation,
-      bounds: imageDimensions,
+    if (!floorPlanImage || !origin || !selectedFile) {
+      alert("Please upload a floor plan, set the origin, and choose a file.");
+      return;
     }
 
     try {
-      await tourDB.saveFloorPlan(floorPlan)
-      alert("Floor plan saved successfully!")
-      console.log("[v0] Floor plan saved:", floorPlan)
-    } catch (error) {
-      console.error("[v0] Error saving floor plan:", error)
-      alert("Failed to save floor plan.")
+      // Build FormData to upload actual file to backend (stored + saved to Mongo)
+      const form = new FormData();
+      form.append("file", selectedFile);
+      form.append("name", floorPlanName || "Untitled Floor Plan");
+      form.append("scale", scale.toString());
+      form.append("rotation", rotation.toString());
+      form.append("origin_lat", origin.latitude.toString());
+      form.append("origin_lon", origin.longitude.toString());
+      form.append("width", imageDimensions.width.toString());
+      form.append("height", imageDimensions.height.toString());
+
+      const res = await fetch("http://localhost:8000/upload-floorplan", {
+        method: "POST",
+        body: form,
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => null);
+        console.error("[v0] Upload failed:", res.status, text);
+        alert("Failed to upload floor plan to server.");
+        return;
+      }
+
+      // server response with backend metadata (imageUrl, id, bounds, etc.)
+      const data = await res.json();
+      const backendFloorPlan = data.floorPlan;
+
+      // Build the object we store locally (preserve existing IndexedDB behavior)
+      // Keep the original base64 image under `localImage` so UI and offline still use it.
+      // ⭐ Correct Option A: Always store both URLs in IndexedDB
+      const localFloorPlan: FloorPlan = {
+        id: backendFloorPlan.id,
+        name: backendFloorPlan.name,
+        imageUrl: backendFloorPlan.imageUrl,   // ← backend JPG URL
+        localImage: floorPlanImage,            // ← base64 for offline
+        scale: backendFloorPlan.scale,
+        rotation: backendFloorPlan.rotation,
+        origin: backendFloorPlan.origin,
+        bounds: {
+          width: imageDimensions.width,
+          height: imageDimensions.height,
+        },
+      };
+
+      // Save to IndexedDB (unchanged behavior)
+      await tourDB.saveFloorPlan(localFloorPlan);
+
+      alert("Floor plan saved: backend (Mongo) + local (IndexedDB).");
+      console.log("[v0] FloorPlan backend:", backendFloorPlan);
+      console.log("[v0] FloorPlan local saved:", localFloorPlan);
+    } catch (err) {
+      console.error("[v0] handleSave error:", err);
+      alert("An error occurred while saving Athe floor plan. See console.");
     }
-  }
+  };
+
 
   const handleCancel = () => {
     setFloorPlanImage(null)

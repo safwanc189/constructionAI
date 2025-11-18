@@ -64,6 +64,7 @@ export interface FloorPlan {
     width: number
     height: number
   }
+  localImage?: string
 }
 
 export interface VirtualTour {

@@ -292,66 +292,75 @@ export function VirtualTourViewer({ tour, floorPlan }: VirtualTourViewerProps) {
 
       {/* Floor Plan Mini Map with Current Position */}
       {showFloorPlan && floorPlan && (
-        <div className="absolute top-20 left-4 w-64 h-64 bg-black/80 rounded-lg border border-white/20 overflow-hidden">
+        <div
+          className="absolute top-20 left-4 bg-black/80 rounded-lg border border-white/20 overflow-hidden"
+          style={{
+            width: "280px",
+            height: `${280 * (floorPlan.bounds.height / floorPlan.bounds.width)}px`,
+          }}
+        >
           <div className="relative w-full h-full p-2">
             <img
-              src={floorPlan.imageUrl || "/placeholder.svg"}
+              src={`http://localhost:8000${floorPlan.imageUrl}`}
               alt="Floor plan"
-              className="w-full h-full object-contain opacity-60"
+              className="absolute inset-0 w-full h-full object-contain opacity-60"
             />
-            {/* Path overlay */}
-            <svg className="absolute inset-0 w-full h-full">
-              {/* Draw path */}
+
+            {/* Corrected SVG using normalized 0–100 coords */}
+            <svg
+              className="absolute inset-0 w-full h-full"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              {/* PATH */}
               <path
                 d={tour.capturePoints
                   .map((point, index) => {
                     const pos = getFloorPlanPosition(point)
                     if (!pos) return ""
-                    const x = (pos.x / floorPlan.bounds.width) * 256 + 8
-                    const y = (pos.y / floorPlan.bounds.height) * 256 + 8
-                    return index === 0 ? `M ${x} ${y}` : `L ${x} ${y}`
+                    const nx = (pos.x / floorPlan.bounds.width) * 100
+                    const ny = (pos.y / floorPlan.bounds.height) * 100
+                    return index === 0 ? `M ${nx} ${ny}` : `L ${nx} ${ny}`
                   })
                   .join(" ")}
                 fill="none"
                 stroke="#00D9A3"
-                strokeWidth="2"
+                strokeWidth="1.5"
               />
-              {/* Draw capture points */}
+
+              {/* POINTS */}
               {tour.capturePoints.map((point, index) => {
                 const pos = getFloorPlanPosition(point)
                 if (!pos) return null
-                const x = (pos.x / floorPlan.bounds.width) * 256 + 8
-                const y = (pos.y / floorPlan.bounds.height) * 256 + 8
+                const nx = (pos.x / floorPlan.bounds.width) * 100
+                const ny = (pos.y / floorPlan.bounds.height) * 100
                 const isCurrent = index === currentIndex
 
                 return (
                   <g key={point.id} className="cursor-pointer" onClick={() => handleFloorPlanClick(index)}>
                     <circle
-                      cx={x}
-                      cy={y}
-                      r={isCurrent ? 8 : 4}
-                      fill={isCurrent ? "#00D9A3" : "#00D9A3"}
+                      cx={nx}
+                      cy={ny}
+                      r={isCurrent ? 3 : 1.8}
+                      fill="#00D9A3"
                       stroke="white"
-                      strokeWidth={isCurrent ? 3 : 1}
-                      className="hover:r-6 transition-all"
+                      strokeWidth={isCurrent ? 1 : 0.5}
                     />
                     {isCurrent && (
-                      <>
-                        <circle cx={x} cy={y} r={12} fill="none" stroke="#00D9A3" strokeWidth="2" opacity="0.5" />
-                        <line
-                          x1={x}
-                          y1={y}
-                          x2={x + Math.cos((point.direction * Math.PI) / 180) * 20}
-                          y2={y + Math.sin((point.direction * Math.PI) / 180) * 20}
-                          stroke="#00D9A3"
-                          strokeWidth="2"
-                        />
-                      </>
+                      <line
+                        x1={nx}
+                        y1={ny}
+                        x2={nx + Math.cos((point.direction * Math.PI) / 180) * 6}
+                        y2={ny + Math.sin((point.direction * Math.PI) / 180) * 6}
+                        stroke="#00D9A3"
+                        strokeWidth="1.5"
+                      />
                     )}
                   </g>
                 )
               })}
             </svg>
+
             <div className="absolute top-2 left-2 bg-primary text-primary-foreground px-2 py-1 rounded text-xs font-semibold">
               CURRENT LOCATION
             </div>

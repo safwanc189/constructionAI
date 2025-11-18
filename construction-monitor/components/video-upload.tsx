@@ -530,72 +530,59 @@ export function VideoUpload({ floorPlan }: VideoUploadProps) {
                   </Button>
                 </div>
               </div>
-              <div className="relative">
+              <div className="relative w-full h-64">
                 <img
                   ref={floorImgRef}
-                  src={floorPlan.imageUrl || "/placeholder.svg"}
-                  alt="Floor plan"
-                  className="w-full h-64 object-contain rounded-md cursor-crosshair"
-                  onClick={handlePickAnchor}
+                  src={
+                    floorPlan.localImage
+                      ? floorPlan.localImage
+                      : `http://localhost:8000${floorPlan.imageUrl}`
+                  }
+                  className="absolute inset-0 w-full h-full object-contain"
                 />
-                <svg className="absolute inset-0 w-full h-64 pointer-events-none">
+
+                <svg
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="xMidYMid meet"
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                >
+                  {/* Drawn path */}
                   {drawnPathPx && drawnPathPx.length > 1 && (
                     <path
                       d={drawnPathPx
                         .map((pt, i) => {
-                          const x = (pt.x / floorPlan.bounds.width) * renderSize.w
-                          const y = (pt.y / floorPlan.bounds.height) * renderSize.h
-                          return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`
+                          const nx = pt.x / floorPlan.bounds.width
+                          const ny = pt.y / floorPlan.bounds.height
+                          return i === 0 ? `M ${nx * 100} ${ny * 100}` : `L ${nx * 100} ${ny * 100}`
                         })
                         .join(" ")}
-                      fill="none"
                       stroke="#00D9A3"
-                      strokeWidth="3"
-                      opacity="0.8"
+                      strokeWidth="1.2"
+                      fill="none"
                     />
                   )}
+
+                  {/* Start point */}
                   {anchorStartPx && (
                     <circle
-                      cx={(anchorStartPx.x / floorPlan.bounds.width) * renderSize.w}
-                      cy={(anchorStartPx.y / floorPlan.bounds.height) * renderSize.h}
-                      r="6"
+                      cx={(anchorStartPx.x / floorPlan.bounds.width) * 100}
+                      cy={(anchorStartPx.y / floorPlan.bounds.height) * 100}
+                      r="2.8"
                       fill="#22c55e"
                       stroke="white"
-                      strokeWidth="2"
+                      strokeWidth="0.8"
                     />
                   )}
+
+                  {/* Forward point */}
                   {anchorForwardPx && (
                     <circle
-                      cx={(anchorForwardPx.x / floorPlan.bounds.width) * renderSize.w}
-                      cy={(anchorForwardPx.y / floorPlan.bounds.height) * renderSize.h}
-                      r="6"
+                      cx={(anchorForwardPx.x / floorPlan.bounds.width) * 100}
+                      cy={(anchorForwardPx.y / floorPlan.bounds.height) * 100}
+                      r="2.8"
                       fill="#3b82f6"
                       stroke="white"
-                      strokeWidth="2"
-                    />
-                  )}
-                  {!drawnPathPx && anchorStartPx && anchorForwardPx && (capturePoints as any).__localPath && (
-                    <path
-                      d={(() => {
-                        const localPath: { x: number; y: number }[] = (capturePoints as any).__localPath
-                        const t = estimateSimilarityFromTwoAnchors({
-                          floorStartPx: anchorStartPx,
-                          floorForwardPx: anchorForwardPx,
-                          localForwardMeters: 1,
-                        })
-                        const fp = transformLocalPath(localPath, t)
-                        return fp
-                          .map((pt, i) => {
-                            const x = (pt.x / floorPlan.bounds.width) * renderSize.w
-                            const y = (pt.y / floorPlan.bounds.height) * renderSize.h
-                            return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`
-                          })
-                          .join(" ")
-                      })()}
-                      fill="none"
-                      stroke="#00D9A3"
-                      strokeWidth="3"
-                      opacity="0.7"
+                      strokeWidth="0.8"
                     />
                   )}
                 </svg>
@@ -614,7 +601,11 @@ export function VideoUpload({ floorPlan }: VideoUploadProps) {
         <div className="fixed inset-0 z-50 bg-black/60 p-6 flex items-center justify-center">
           <div className="max-w-5xl w-full rounded-lg bg-background p-4">
             <FloorPathEditor
-              floorPlanImageUrl={floorPlan.imageUrl}
+              floorPlanImageUrl={
+                floorPlan.localImage
+                  ? floorPlan.localImage
+                  : `http://localhost:8000${floorPlan.imageUrl}`
+              }
               onCancel={() => setShowPathEditor(false)}
               onComplete={({ start, polyline }) => {
                 // convert normalized -> pixels
