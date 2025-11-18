@@ -1,0 +1,24 @@
+{
+  "floorPlan": {
+    "id": "demo-floorplan",
+    "imageUrl": "/demo/demo-floorplan.jpg",
+    "bounds": { "width": 1000, "height": 700 }
+  },
+  "positions": [
+    {
+      "id": "p1",
+      "floorPlanPosition": { "x": 300, "y": 350 },
+      "stitchedPanoramaUrl": "/demo/panoramas/pano-1.jpg"
+    },
+    {
+      "id": "p2",
+      "floorPlanPosition": { "x": 600, "y": 350 },
+      "stitchedPanoramaUrl": "/demo/panoramas/pano-2.jpg"
+    },
+    {
+      "id": "p3",
+      "floorPlanPosition": { "x": 600, "y": 550 },
+      "stitchedPanoramaUrl": "/demo/panoramas/pano-3.jpg"
+    }
+  ]
+}

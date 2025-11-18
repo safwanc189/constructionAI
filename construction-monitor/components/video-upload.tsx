@@ -249,7 +249,25 @@ export function VideoUpload({ floorPlan }: VideoUploadProps) {
     setIsProcessing(false)
   }
   // --- End copy ---
+  async function saveTourToMongo(tour: VirtualTour) {
+    try {
+      const res = await fetch("http://localhost:8000/save-tour", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tour),
+      });
 
+      if (!res.ok) {
+        console.error("MongoDB save failed:", await res.text());
+        alert("Warning: Tour saved locally but not in MongoDB.");
+      } else {
+        console.log("Tour saved to MongoDB.");
+      }
+    } catch (err) {
+      console.error("Network error saving to MongoDB:", err);
+      alert("MongoDB unreachable. Saved only in local DB.");
+    }
+  }
   // --- Copy this block ---
   const handleSaveTour = async () => {
     if (capturePoints.length === 0) {
@@ -379,6 +397,8 @@ export function VideoUpload({ floorPlan }: VideoUploadProps) {
       }
 
       await tourDB.saveTour(tour)
+      // ALSO SAVE TO MONGO
+      await saveTourToMongo(tour);
       // Keep saving capture points for the Compare feature
       for (const cp of tour.capturePoints) await tourDB.saveCapturePoint(cp)
 

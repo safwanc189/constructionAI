@@ -24,7 +24,8 @@ import re, ast
 from fpdf import FPDF
 from datetime import datetime
 from pymongo import MongoClient
-
+from bson import ObjectId
+from fastapi import Query
 # ---------------------------------------------------------
 # 1️⃣ APP SETUP
 # ---------------------------------------------------------
@@ -58,6 +59,7 @@ MONGO_URI = "mongodb://localhost:27017"
 client = MongoClient(MONGO_URI)
 db = client["construction_ai"]
 floorplans_collection = db["floorplans"]
+tours_collection = db["tours"]
 
 
 # =========================================================
@@ -507,6 +509,42 @@ def root():
     """Health check route — confirms backend is running."""
     return {"message": "✅ FastAPI Stitching Service is live and running!"}
 
+# # ---------------------------------------------------------
+# # Construction-view
+# # ---------------------------------------------------------
+# @app.get("/tours")
+# async def list_tours(floorplan_id: str = Query(None)):
+#     """
+#     Return list of tours (optionally filtered by floorplan id).
+#     """
+#     try:
+#         query = {}
+#         if floorplan_id:
+#             # if tours store floorPlan.id inside "floorPlan.id" or "floorPlan" adjust accordingly
+#             query["floorPlan.id"] = floorplan_id
+#         docs = list(tours_collection.find(query))
+#         # Convert ObjectId to str for JSON
+#         for d in docs:
+#             d["_id"] = str(d["_id"])
+#         return {"tours": docs}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+# # ---------------------------------------------------------
+# # Save Tour MOngo
+# # ---------------------------------------------------------
+# @app.post("/save-tour")
+# async def save_tour(tour: dict):
+#     try:
+#         result = tours_collection.insert_one(tour)
+#         return {
+#             "message": "Tour saved to MongoDB",
+#             "id": str(result.inserted_id)
+#         }
+#     except Exception as e:
+#         raise HTTPException(500, f"Failed to save tour: {e}")    
+    
+
+
 # ---------------------------------------------------------
 # Floor Plan Upload Endpoint
 # ---------------------------------------------------------
@@ -575,6 +613,7 @@ async def upload_floorplan(
     except Exception as e:
         logging.error(f"❌ Floor plan upload failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+    
 
 # ---------------------------------------------------------
 # Upload Endpoint

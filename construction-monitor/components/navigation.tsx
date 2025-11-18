@@ -6,6 +6,7 @@ import { Camera, Map, GitCompare, Upload, Home, Menu, Video } from "lucide-react
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useState } from "react"
+import { Building2 } from "lucide-react"
 
 export function Navigation() {
   const pathname = usePathname()
@@ -15,6 +16,7 @@ export function Navigation() {
     { href: "/", label: "Dashboard", icon: Home },
     { href: "/capture", label: "Capture", icon: Camera },
     { href: "/floor-plan", label: "Floor Plan", icon: Map },
+    { href: "/construction-view", label: "Construction View", icon: Building2 },
     { href: "/comparison", label: "Compare", icon: GitCompare },
     { href: "/export-import", label: "Export/Import", icon: Upload },
     { href: "/video-upload", label: "Video Upload", icon: Video },
